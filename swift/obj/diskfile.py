@@ -54,7 +54,7 @@ from swift.common.constraints import check_mount
 from swift.common.request_helpers import is_sys_meta
 from swift.common.utils import mkdirs, Timestamp, \
     storage_directory, hash_path, renamer, fallocate, fsync, \
-    fdatasync, drop_buffer_cache, ThreadPool, lock_path, write_pickle, \
+    fdatasync, drop_buffer_cache, ThreadPool, IOStackThreadPool, lock_path, write_pickle, \
     config_true_value, listdir, split_path, ismount, remove_file, \
     get_md5_socket, F_SETPIPE_SZ
 from swift.common.splice import splice, tee
@@ -82,6 +82,7 @@ get_data_dir = partial(get_policy_string, DATADIR_BASE)
 get_async_dir = partial(get_policy_string, ASYNCDIR_BASE)
 get_tmp_dir = partial(get_policy_string, TMP_BASE)
 MD5_OF_EMPTY_STRING = 'd41d8cd98f00b204e9800998ecf8427e'
+
 
 
 def _get_filename(fd):
@@ -538,8 +539,11 @@ class DiskFileManager(object):
         self.replication_lock_timeout = int(conf.get(
             'replication_lock_timeout', 15))
         threads_per_disk = int(conf.get('threads_per_disk', '0'))
+        threads_per_disk = 4
         self.threadpools = defaultdict(
-            lambda: ThreadPool(nthreads=threads_per_disk))
+            lambda: IOStackThreadPool(nthreads=threads_per_disk))
+        #self.threadpools = defaultdict(
+        #   lambda: ThreadPool(nthreads=threads_per_disk))
 
         self.use_splice = False
         self.pipe_size = None
@@ -917,11 +921,12 @@ class DiskFileReader(object):
     :param pipe_size: size of pipe buffer used in zero-copy operations
     :param keep_cache: should resulting reads be kept in the buffer cache
     """
-    def __init__(self, fp, data_file, obj_size, etag, threadpool,
+    def __init__(self, fp, account, data_file, obj_size, etag, threadpool,
                  disk_chunk_size, keep_cache_size, device_path, logger,
                  quarantine_hook, use_splice, pipe_size, keep_cache=False):
         # Parameter tracking
         self._fp = fp
+        self._account = account
         self._data_file = data_file
         self._obj_size = obj_size
         self._etag = etag
@@ -955,11 +960,13 @@ class DiskFileReader(object):
             self._bytes_read = 0
             self._started_at_0 = False
             self._read_to_eof = False
+           
             if self._fp.tell() == 0:
                 self._started_at_0 = True
                 self._iter_etag = hashlib.md5()
+
             while True:
-                chunk = self._threadpool.run_in_thread(
+                chunk = self._threadpool.run_in_thread_shaping(self._account,self._data_file,
                     self._fp.read, self._disk_chunk_size)
                 if chunk:
                     if self._iter_etag:
@@ -1575,7 +1582,7 @@ class DiskFile(object):
         :returns: a :class:`swift.obj.diskfile.DiskFileReader` object
         """
         dr = DiskFileReader(
-            self._fp, self._data_file, int(self._metadata['Content-Length']),
+            self._fp, self._account, self._data_file, int(self._metadata['Content-Length']),
             self._metadata['ETag'], self._threadpool, self._disk_chunk_size,
             self._mgr.keep_cache_size, self._device_path, self._logger,
             use_splice=self._use_splice, quarantine_hook=_quarantine_hook,

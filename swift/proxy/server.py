@@ -399,7 +399,8 @@ class Application(object):
             nodes.sort(key=key_func)
         elif self.sorting_method == 'affinity':
             nodes.sort(key=self.read_affinity_sort_key)
-        return nodes
+        self.logger.error(_('List %s'),nodes)
+	return nodes
 
     def set_node_timing(self, node, timing):
         if self.sorting_method != 'timing':

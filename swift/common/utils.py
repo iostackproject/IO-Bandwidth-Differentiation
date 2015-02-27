@@ -68,8 +68,8 @@ from swift import gettext_ as _
 import swift.common.exceptions
 from swift.common.http import is_success, is_redirection, HTTP_NOT_FOUND, \
     HTTP_PRECONDITION_FAILED, HTTP_REQUESTED_RANGE_NOT_SATISFIABLE
-
-
+import random
+import psutil
 # logging doesn't import patched as cleanly as one would like
 from logging.handlers import SysLogHandler
 import logging
@@ -2919,6 +2919,424 @@ class ThreadPool(object):
 
         self.rpipe.close()
         os.close(self.wpipe)
+
+class IOStackThreadPool(object):
+    BYTE = 'a'.encode('utf-8')   
+
+    """
+    Perform blocking operations in background threads.
+
+    Call its methods from within greenlets to green-wait for results without
+    blocking the eventlet reactor (hopefully).
+
+    For IOStack we will need to create one queue per tenant. Once we have that each
+    request will be inserted to its queue. Request will be handled in a roundrobin fashion.
+    Such round robin can be broken if the needed bandwidth is already achieved.
+
+    The bandwidth is a hard limit (on both sides) now.
+
+    """
+    def __init__(self, nthreads=2):
+        self.nthreads = nthreads
+        self._run_queues = []
+        self._result_queues = []
+        self._threads = []
+        self._alive = True
+        self._calculated_BW = []
+        self._needed_BW = []
+        self._last_REQ = []
+
+        if nthreads <= 0:
+            return
+
+        # We spawn a greenthread whose job it is to pull results from the
+        # worker threads via a real Queue and send them to eventlet Events so
+        # that the calling greenthreads can be awoken.
+        #
+        # Since each OS thread has its own collection of greenthreads, it
+        # doesn't work to have the worker thread send stuff to the event, as
+        # it then notifies its own thread-local eventlet hub to wake up, which
+        # doesn't do anything to help out the actual calling greenthread over
+        # in the main thread.
+        #
+        # Thus, each worker sticks its results into a result queue and then
+        # writes a byte to a pipe, signaling the result-consuming greenlet (in
+        # the main thread) to wake up and consume results.
+        #
+        # This is all stuff that eventlet.tpool does, but that code can't have
+        # multiple instances instantiated. Since the object server uses one
+        # pool per disk, we have to reimplement this stuff.
+        _raw_rpipe, self.wpipe = os.pipe()
+        self.rpipe = greenio.GreenPipe(_raw_rpipe, 'rb', bufsize=0)
+        
+        self._calculated_BW.append(0)
+        self._calculated_BW.append(0)
+        self._calculated_BW.append(0)
+        self._calculated_BW.append(0)
+        self._last_REQ.append(0)
+        self._last_REQ.append(0)
+        self._last_REQ.append(0)
+        self._last_REQ.append(0)
+        # TODO: Read or obtain externaly
+        self._needed_BW.append(90)
+        self._needed_BW.append(90)
+        self._needed_BW.append(20)
+        self._needed_BW.append(20)
+
+        for _junk in xrange(nthreads):
+            rq = Queue()
+            resq = Queue()
+            self._run_queues.append(rq)
+            self._result_queues.append(resq)
+            thr = stdlib_threading.Thread(
+                target=self._worker,
+                args=(self._run_queues[_junk], self._result_queues[_junk],_junk))
+            thr.daemon = True
+            thr.start()
+            self._threads.append(thr)
+
+        # This is the result-consuming greenthread that runs in the main OS
+        # thread, as described above.
+
+        # Pass a results queues, as we will have different queues 
+        self._consumer_coro = greenthread.spawn_n(self._consume_results,
+                                                  self._result_queues)
+
+    def _getDiskIOQueue (self,disk):
+        """
+        reads /proc/diskstats ioqueue column
+
+        :param disk: "sdc"
+        :returns: ioqueue value
+
+        """
+        for line in (open("/proc/diskstats",'r').xreadlines()):
+            values = line.split ()
+            if values[2] == disk:
+                return int(values[11])
+        return 0
+        
+
+    def _getDiskStats (self, disk):
+        """
+        Aggregates all the partitions of the same disk 
+
+        It should be better to put it out of the IOStackThreadPool
+
+        :param disk: "sdc"
+        :returns: read and write bytes of the disk.
+
+        """
+        stats = psutil.disk_io_counters(perdisk=True)
+        read = 0;
+        write = 0;
+        for i in stats:
+            if disk in i:
+                read = stats[i].read_bytes
+                write = stats[i].write_bytes
+        return (read,write)
+
+    def _getCPUIOWait (self):
+        """
+        Returns IOWait , 
+        :returns: IOWait absolute value.
+
+        """
+        stats = psutil.cpu_times().iowait
+        return stats            
+
+    def _worker(self, work_queue, result_queue, index):
+        """
+        Pulls an item from the queue and runs it, then puts the result into
+        the result queue. Repeats forever.
+
+        :param work_queue: queue from which to pull work
+        :param result_queue: queue into which to place results
+        """
+
+        # BW Control
+        totalsize = 0
+        totaltime = 0
+        old_read, old_write = (0,0) # The first request assumes that the disk is being used
+        old_iowait = self._getCPUIOWait()
+        start_global = time.time() # This works because queues are created at the first request.... BIG TODO
+        while True:
+            item = work_queue.get()
+            if item is None:
+                break
+
+            ev, disk, func, args, kwargs = item
+
+            queued = False
+
+            #Calculate the attained BW
+            if totalsize > 0:
+                totaltime = time.time() - start_global
+                self._calculated_BW[index] = totalsize / totaltime
+            #update disk stats
+            if disk is not None:
+                new_read, new_write = self._getDiskStats(disk[0:-1])
+                diff_read, diff_write = ((new_read - old_read) , (new_write - old_write))
+                old_read, old_write = (new_read, new_write)
+            else: diff_read, diff_write = (0, 0)
+
+            new_iowait = self._getCPUIOWait()
+            diff_iowait = new_iowait - old_iowait
+            old_iowait = new_iowait
+
+            # If our BW is higher
+            if (self._calculated_BW[index] > (self._needed_BW[index])+1):
+                #Check that we need BW in other queues
+
+                needed = False
+                for i in xrange(self.nthreads):
+                    if (i == index): continue
+                    # Reinitialize the counter, if the last request has been a long time ago, the stream should be closed
+                    # We do not compite anymore with that stream
+                    if ((time.time() - self._last_REQ[i]) > 2): self._last_REQ[i] = 0 
+                    if (self._last_REQ[i] == 0): continue
+                    if (self._calculated_BW[i] < self._needed_BW[i]):       # TODO: This needs to check only object servers in the same node...
+                        needed = True
+                        break
+                # We may need BW in other worker (in the same object store)
+                if needed:
+                    work_queue.put(item)
+                    needed_elapsed = totalsize/self._needed_BW[index]
+                    total_wait = needed_elapsed-totaltime
+                    logging.warning("%(index)s Waiting %(waiting)s seconds",{'index':index,'waiting':total_wait})
+                    sleep(total_wait)
+                    queued = True
+                else:
+                    # We may share the same device with other processes
+                    # We should not be greedy
+                    # We check this issue with standard psutil tools
+                    """ To Remove
+                    if (((diff_read) + (diff_write)) > 65*1024):
+                        # Need a better way, but 65KB should be safe, to identify a competing process
+
+                        if (diff_iowait > 0.02):
+                            # We only act if the disk is overloaded (0.02 second of wait in the queue)
+                            # This allows to get faster speeds with 4 competing streams at 20 MB/s each one
+                            # if the allowed bandwidth is higher.
+                    """
+                    ioqueue = self._getDiskIOQueue(disk[0:-1])
+                    total_used = diff_read + diff_write
+                    if ((ioqueue > 0) and (diff_iowait > 0) and (total_used > 65*1024)):
+                        work_queue.put(item)
+                        needed_elapsed = totalsize/self._needed_BW[index]
+                        total_wait = needed_elapsed-totaltime
+                        logging.warning("%(index)s Shared Disk %(waiting)s seconds, used %(bytes)s, iowait %(iowait)s, ioqueue %(ioqueue)s",{'index':index,'waiting':total_wait,'bytes':(diff_read + diff_write), 'iowait':diff_iowait, 'ioqueue':ioqueue})
+                        # In that situation, we should not wait forever, we should wait only a few seconds
+                        # and check again if the disk situation has stabilized.
+                        # If not we may see total_wait of xxx seconds in order to fit the needed BW
+                        # However, here is another situation where we need to push a "timeout" renewal into the proxy
+                        # as we may not progress if the situation does not changes.
+                        # As alternatives we can have a counter and push that request even if the BW is broken. 
+                        sleep(min(total_wait,1*ioqueue))
+                        queued = True
+
+                if queued: 
+                    queued = False
+                    continue
+                # TODO Do we have multi-items per queue ?, then we need to recognize them, an put some
+                # priority queue, but it needs to be highly mutable.
+            
+
+            try:
+                #Start Clock
+                #start = time.time()
+
+                result = func(*args, **kwargs)
+                #end = time.time()
+                #elapsed = (end - start)
+                #if (elapsed == 0): elapsed = 0.00001
+                size = args[0]/(1024.0*1024.0)
+                totalsize = size + totalsize
+                self._last_REQ[index] = time.time()
+                #totaltime = end-start_global
+                #speed_instantaneous = size / elapsed
+                #speed_global = totalsize / totaltime
+                #self._calculated_BW[index] = speed_global
+                #logging.warning("%(index)s Status:  Time %(waiting)s / %(waiti)s seconds, speed %(si)s / %(st)s for size: %(ts)s / %(ti)s",{'index':index,'waiting':totaltime,'waiti':elapsed,'si':speed_instantaneous,'st':speed_global,'ts':totalsize,'ti':size})
+                #if (speed_global > (self._needed_BW[index]+0.5)):
+                    #delay response
+                #    needed_elapsed = totalsize/self._needed_BW[index]
+                #    logging.warning("%(index)s Waiting %(waiting)s seconds, speed %(si)s / %(st)s for size: %(ts)s / %(ti)s",{'index':index,'waiting':needed_elapsed-totaltime,'si':speed_instantaneous,'st':speed_global,'st':speed_global,'ts':totalsize,'ti':size})
+                #    sleep (needed_elapsed-totaltime)
+                result_queue.put((ev, True, result))
+            except BaseException:
+                result_queue.put((ev, False, sys.exc_info()))
+            finally:
+                work_queue.task_done()
+                os.write(self.wpipe, u'%05d' % index)  # this byte represents which queue we are working
+                #logging.warning("I am using queue %(queue)s",{'queue':index})
+    def _consume_results(self, queue):
+        """
+        Runs as a greenthread in the same OS thread as callers of
+        run_in_thread().
+
+        Takes results from the worker OS threads and sends them to the waiting
+        greenthreads.
+        """
+        while True:
+            try:
+                queue_num = self.rpipe.read(5)
+                queue_num = int(queue_num)
+            except ValueError:
+                # can happen at process shutdown when pipe is closed
+                break
+
+            while True:
+                try:
+                    ev, success, result = queue[queue_num].get(block=False)
+                except Empty:
+                    break
+
+                try:
+                    if success:
+                        ev.send(result)
+                    else:
+                        ev.send_exception(*result)
+                finally:
+                    queue[queue_num].task_done()
+
+    def run_in_thread(self, func, *args, **kwargs):
+        """
+        Runs func(*args, **kwargs) in a thread. Blocks the current greenlet
+        until results are available.
+
+        Exceptions thrown will be reraised in the calling thread.
+
+        If the threadpool was initialized with nthreads=0, it invokes
+        func(*args, **kwargs) directly, followed by eventlet.sleep() to ensure
+        the eventlet hub has a chance to execute. It is more likely the hub
+        will be invoked when queuing operations to an external thread.
+
+        :returns: result of calling func
+        :raises: whatever func raises
+        """
+        if not self._alive:
+            raise swift.common.exceptions.ThreadPoolDead()
+
+        if self.nthreads <= 0:
+            result = func(*args, **kwargs)
+            sleep()
+            return result
+
+        ev = event.Event()
+        queue_num = random.randint(0,self.nthreads-1) 
+        disk = None
+        self._run_queues[queue_num].put((ev, disk, func, args, kwargs), block=False)
+        logging.warning("I am running with this params  %(parameters)s",{'parameters':self})
+        # blocks this greenlet (and only *this* greenlet) until the real
+        # thread calls ev.send().
+        result = ev.wait()
+        return result
+
+    def run_in_thread_shaping(self, account, data_file, func, *args, **kwargs):
+        """
+        Runs func(*args, **kwargs) in a thread. Blocks the current greenlet
+        until results are available.
+
+        Exceptions thrown will be reraised in the calling thread.
+
+        If the threadpool was initialized with nthreads=0, it invokes
+        func(*args, **kwargs) directly, followed by eventlet.sleep() to ensure
+        the eventlet hub has a chance to execute. It is more likely the hub
+        will be invoked when queuing operations to an external thread.
+
+        We pass the account information to make shaping.
+
+        :returns: result of calling func
+        :raises: whatever func raises
+        """
+        if not self._alive:
+            raise swift.common.exceptions.ThreadPoolDead()
+
+        if self.nthreads <= 0:
+            result = func(*args, **kwargs)
+            sleep()
+            return result
+
+        ev = event.Event()
+
+        #TODO : Should be externaly, or create - destroy each work queue per stream and maintain some dict. 
+        if "684" in data_file: queue_num = 0
+        if "723" in data_file: queue_num = 1
+        if "843" in data_file: queue_num = 2
+        if "631" in data_file: queue_num = 3
+        #TODO : We should find the disk that maps the path found in the data_file (i.e., sdc1)
+        disk = "sdc1"
+
+        self._run_queues[queue_num].put((ev, disk, func, args, kwargs), block=False)
+        # blocks this greenlet (and only *this* greenlet) until the real
+        # thread calls ev.send().
+        result = ev.wait()
+        return result
+
+    def _run_in_eventlet_tpool(self, func, *args, **kwargs):
+        """
+        Really run something in an external thread, even if we haven't got any
+        threads of our own.
+        """
+        def inner():
+            try:
+                return (True, func(*args, **kwargs))
+            except (Timeout, BaseException) as err:
+                return (False, err)
+
+        success, result = tpool.execute(inner)
+        if success:
+            return result
+        else:
+            raise result
+
+    def force_run_in_thread(self, func, *args, **kwargs):
+        """
+        Runs func(*args, **kwargs) in a thread. Blocks the current greenlet
+        until results are available.
+
+        Exceptions thrown will be reraised in the calling thread.
+
+        If the threadpool was initialized with nthreads=0, uses eventlet.tpool
+        to run the function. This is in contrast to run_in_thread(), which
+        will (in that case) simply execute func in the calling thread.
+
+        :returns: result of calling func
+        :raises: whatever func raises
+        """
+        if not self._alive:
+            raise swift.common.exceptions.ThreadPoolDead()
+
+        if self.nthreads <= 0:
+            return self._run_in_eventlet_tpool(func, *args, **kwargs)
+        else:
+            return self.run_in_thread(func, *args, **kwargs)
+
+    def terminate(self):
+        """
+        Releases the threadpool's resources (OS threads, greenthreads, pipes,
+        etc.) and renders it unusable.
+
+        Don't call run_in_thread() or force_run_in_thread() after calling
+        terminate().
+        """
+        self._alive = False
+        if self.nthreads <= 0:
+            return
+
+        for _junk in range(self.nthreads):
+            self._run_queue.put(None)
+        for thr in self._threads:
+            thr.join()
+        self._threads = []
+        self.nthreads = 0
+
+        greenthread.kill(self._consumer_coro)
+
+        self.rpipe.close()
+        os.close(self.wpipe)
+
 
 
 def ismount(path):
