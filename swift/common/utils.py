@@ -3143,33 +3143,17 @@ class IOStackThreadPool(object):
             
 
             try:
-                #Start Clock
-                #start = time.time()
-
                 result = func(*args, **kwargs)
-                #end = time.time()
-                #elapsed = (end - start)
-                #if (elapsed == 0): elapsed = 0.00001
                 size = args[0]/(1024.0*1024.0)
                 totalsize = size + totalsize
                 self._last_REQ[index] = time.time()
-                #totaltime = end-start_global
-                #speed_instantaneous = size / elapsed
-                #speed_global = totalsize / totaltime
-                #self._calculated_BW[index] = speed_global
-                #logging.warning("%(index)s Status:  Time %(waiting)s / %(waiti)s seconds, speed %(si)s / %(st)s for size: %(ts)s / %(ti)s",{'index':index,'waiting':totaltime,'waiti':elapsed,'si':speed_instantaneous,'st':speed_global,'ts':totalsize,'ti':size})
-                #if (speed_global > (self._needed_BW[index]+0.5)):
-                    #delay response
-                #    needed_elapsed = totalsize/self._needed_BW[index]
-                #    logging.warning("%(index)s Waiting %(waiting)s seconds, speed %(si)s / %(st)s for size: %(ts)s / %(ti)s",{'index':index,'waiting':needed_elapsed-totaltime,'si':speed_instantaneous,'st':speed_global,'st':speed_global,'ts':totalsize,'ti':size})
-                #    sleep (needed_elapsed-totaltime)
                 result_queue.put((ev, True, result))
             except BaseException:
                 result_queue.put((ev, False, sys.exc_info()))
             finally:
                 work_queue.task_done()
                 os.write(self.wpipe, u'%05d' % index)  # this byte represents which queue we are working
-                #logging.warning("I am using queue %(queue)s",{'queue':index})
+                
     def _consume_results(self, queue):
         """
         Runs as a greenthread in the same OS thread as callers of
