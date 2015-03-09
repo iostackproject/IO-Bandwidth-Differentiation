@@ -2945,6 +2945,8 @@ class IOStackThreadPool(object):
         self._threads = []
         self._alive = True
         self._calculated_BW = []
+        self._calculate_BW = []
+
         self._needed_BW = []
         self._last_REQ = []
 
@@ -3051,11 +3053,10 @@ class IOStackThreadPool(object):
         """
 
         # BW Control
-        totalsize = 0
-        totaltime = 0
+        
         old_read, old_write = (0,0) # The first request assumes that the disk is being used
         old_iowait = self._getCPUIOWait()
-        start_global = time.time() # This works because queues are created at the first request.... BIG TODO
+      
         while True:
             item = work_queue.get()
             if item is None:
@@ -3066,10 +3067,15 @@ class IOStackThreadPool(object):
             queued = False
             i = 0
             #Calculate the attained BW
-            if totalsize > 0:
-                totaltime = time.time() - start_global
-                self._calculated_BW[index] = totalsize / totaltime
-            #update disk stats
+            mb , starttime = self._calculate_BW[index]
+            totaltime = time.time() - starttime 
+            totalsize = mb
+            if mb > 0:
+                self._calculated_BW[index] = ( mb / float( time.time() - starttime ) )
+                #logging.warning("%(index)s %(calculated)s > %(needed)s",{'index':index,'calculated':self._calculated_BW[index],'needed':self._needed_BW[index]})
+                    
+
+            #update disk sta
             if disk is not None:
                 new_read, new_write = self._getDiskStats(disk[0:-1])
                 diff_read, diff_write = ((new_read - old_read) , (new_write - old_write))
@@ -3091,10 +3097,12 @@ class IOStackThreadPool(object):
 
                 needed = False
                 for i in xrange(self.nthreads):
-                    if (i == index): continue
+                    if (i == index or self._indexworker[i] == -1): continue
                     # Reinitialize the counter, if the last request has been a long time ago, the stream should be closed
                     # We do not compite anymore with that stream
                     if ((time.time() - self._last_REQ[i]) > 10): # 10 seconds
+                        logging.warning("%(i)s Destroying Queue Timeout",{'i':i})
+                   
                         self._last_REQ[i] = 0 
                         
                         self._indexworker[i] = -1
@@ -3108,6 +3116,7 @@ class IOStackThreadPool(object):
                             self._indexworker.pop()
                             self._last_REQ.pop()
                             self._calculated_BW.pop()
+                            self._calculate_BW.pop()
                             self._needed_BW.pop()
                             
                             thr = self._threads.pop()
@@ -3119,23 +3128,23 @@ class IOStackThreadPool(object):
                     elif (self._calculated_BW[i] < self._needed_BW[i]):      
                         needed = True
                         break
-                # We may need BW in other worker (in the same object store)
+                # We may need BW in other worker (in the same object store), so wait for it
                 if needed:
-                    work_queue.put(item)
+                   #work_queue.put(item)
                     needed_elapsed = totalsize/self._needed_BW[index]
                     total_wait = needed_elapsed-totaltime
                     logging.warning("%(index)s Waiting %(waiting)s seconds because BW is higher %(calculated)s > %(needed)s and %(i)s is %(icalculated)s < %(ineeded)s",{'index':index,'waiting':total_wait, 'calculated':self._calculated_BW[index],'needed':self._needed_BW[index], 'i':i, 'icalculated':self._calculated_BW[i], 'ineeded':self._needed_BW[i]})
-                    sleep(total_wait)
+                    sleep(min(total_wait,5.0))
                     queued = True
                 else:
-                    # We may share the same device with other processes
-                    # We should not be greedy
+                    # We may share the same device with other processes, and we don't need the BW so
+                    # we should not be greedy
                     # oldTransfer has the bytes transferred by this object server at the last iteration, however it not accurate as total used includes kernel prefetching activities
                                     
                     ioqueue = self._getDiskIOQueue(disk[0:-1])
                     total_used = diff_read + diff_write
-                    if ((ioqueue > 1) and  (total_used > self._oldTransfer)): #and (diff_iowait > 0) 
-                        work_queue.put(item)
+                    if ( (ioqueue > 0) and (total_used > self._oldTransfer*2) ): #and (diff_iowait > 0) 
+                        #work_queue.put(item)
                         needed_elapsed = totalsize/self._needed_BW[index]
                         total_wait = needed_elapsed-totaltime
                         logging.warning("%(index)s Shared Disk %(waiting)s seconds, used %(bytes)s, iowait %(iowait)s, ioqueue %(ioqueue)s, real transfer %(real)s BW : %(calculated)s > %(needed)s",{'index':index,'waiting':total_wait,'bytes':(diff_read + diff_write), 'iowait':diff_iowait, 'ioqueue':ioqueue, 'real':self._oldTransfer,'calculated':self._calculated_BW[index],'needed':self._needed_BW[index]})
@@ -3145,25 +3154,27 @@ class IOStackThreadPool(object):
                         # However, here is another situation where we need to push a "timeout" renewal into the proxy
                         # as we may not progress if the situation does not changes.
                         # As alternatives we can have a counter and push that request even if the BW is broken. 
-                        sleep(min(total_wait,1*ioqueue))
+                        sleep(min(total_wait,5.0))
                         queued = True
 
                 if queued: 
                     queued = False
-                    continue
+                   # continue
                 # TODO Do we have multi-items per queue ?, then we need to recognize them, an put some
                 # priority queue, but it needs to be highly mutable.
-            else:
+           # elif (self._calculated_BW[index] < self._needed_BW[index] and random.randint(0,100) < 5) :
                 # The BW is below
-                 logging.warning("%(index)s BW below  BW : %(calculated)s > %(needed)s",{'index':index,'calculated':self._calculated_BW[index],'needed':self._needed_BW[index]})
+           #      logging.warning("%(index)s BW below  BW : %(calculated)s > %(needed)s",{'index':index,'calculated':self._calculated_BW[index],'needed':self._needed_BW[index]})
                        
 
             try:
                 result = func(*args, **kwargs)
                 size = args[0]/(1024.0*1024.0)
-                totalsize = size + totalsize
-                self._last_REQ[index] = time.time()
+                mb, starttime = self._calculate_BW[index]
                 result_queue.put((ev, True, result))
+                self._calculate_BW[index] = (mb + size, starttime)
+                self._calculated_BW[index] = ((mb+size)) / float( time.time() - starttime )
+                self._last_REQ[index] = time.time()
             except BaseException:
                 result_queue.put((ev, False, sys.exc_info()))
             finally:
@@ -3283,6 +3294,8 @@ class IOStackThreadPool(object):
              
                 self._calculated_BW[index] = 0
                 self._last_REQ[index] = time.time()
+                self._calculate_BW[index] = (0,time.time())   # KB, start
+
                 self._needed_BW[index] = limit
                 # TODO: If we sent from the client, probably we need it per AUTH, then each AUTH has its queue and not each DATA_FILE... However how this maps to multiple obkect stores, 
                 # Should we limit among them....We need that an external entity to tune each individual participating object store correctly and dynamically
@@ -3293,6 +3306,7 @@ class IOStackThreadPool(object):
                 self._worker2disk[identifier] = self.nthreads
                 self._indexworker.append(self.nthreads)
                 self._calculated_BW.append(0)
+                self._calculate_BW.append( (0,time.time()) )   # KB, start
                 self._last_REQ.append(time.time()) 
                 self._needed_BW.append(limit)
 
