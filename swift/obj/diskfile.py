@@ -40,6 +40,7 @@ import hashlib
 import logging
 import traceback
 import xattr
+import random
 from os.path import basename, dirname, exists, getmtime, join
 from random import shuffle
 from tempfile import mkstemp
@@ -952,7 +953,7 @@ class DiskFileReader(object):
         self._md5_of_sent_bytes = None
         self._suppress_file_closing = False
         self._quarantined_dir = None
-
+        self._limit = random.randint(10,90) 
     def __iter__(self):
         """Returns an iterator over the data file."""
         try:
@@ -966,7 +967,7 @@ class DiskFileReader(object):
                 self._iter_etag = hashlib.md5()
 
             while True:
-                chunk = self._threadpool.run_in_thread_shaping(self._account,self._data_file,
+                chunk = self._threadpool.run_in_thread_shaping(self._account,self._data_file, self._limit,
                     self._fp.read, self._disk_chunk_size)
                 if chunk:
                     if self._iter_etag:
