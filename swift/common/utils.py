@@ -2956,7 +2956,7 @@ class IOStackThreadPool(object):
         # Automatic Worker creation
         self._worker2disk = dict()
         self._indexworker = []
-
+        
         #Threads are created and destroyed based on the workload, each thread works on a data_file
         #if nthreads <= 0:
         #    return
@@ -3041,8 +3041,60 @@ class IOStackThreadPool(object):
 
         """
         stats = psutil.cpu_times().iowait
-        return stats            
+        return stats  
 
+
+    def checkOtherQueues(self, index):
+        needed = False
+        for i in xrange(self.nthreads):
+            if (i == index or self._indexworker[i] == -1): continue
+            # Reinitialize the counter, if the last request has been a long time ago, the stream should be closed
+            # We do not compite anymore with that stream
+            self.update_bw_stats(i)
+            
+            if ((time.time() - self._last_REQ[i]) > 10): # 10 seconds
+                logging.warning("%(i)s Destroying Queue Timeout",{'i':i})
+           
+                self._last_REQ[i] = 0 
+                
+                self._indexworker[i] = -1
+                for worker in self._worker2disk:
+                    if self._worker2disk[worker] == i:
+                        del self._worker2disk[worker]
+                        break
+                # If the candidate workqueue is the last one, we pop and decrease the number of threads
+                if (i == self.nthreads-1):
+                    self._run_queues[i].put(None)
+                    self._indexworker.pop()
+                    self._last_REQ.pop()
+                    self._calculated_BW.pop()
+                    self._calculate_BW.pop()
+                    self._needed_BW.pop()
+                    
+                    thr = self._threads.pop()
+                    thr.join()
+                    self._result_queues.pop()
+                    self.nthreads = self.nthreads-1 # CHECK xrange will work after we do this?
+                continue
+            elif (self._last_REQ[i] == 0): continue
+            elif (self._calculated_BW[i] < self._needed_BW[i]):      
+                needed = True
+                break
+        return needed
+
+    def update_bw_stats(self, index):
+        """
+            Updates the BW stats of a stream,
+            It should be better to do the div every time we check it.
+        """
+        mb , starttime = self._calculate_BW[index]
+        totaltime = time.time() - starttime 
+        totalsize = mb
+        if mb > 0:
+            self._calculated_BW[index] = ( mb / float( time.time() - starttime ) )
+                #logging.warning("%(index)s %(calculated)s > %(needed)s",{'index':index,'calculated':self._calculated_BW[index],'needed':self._needed_BW[index]})
+        return totaltime, totalsize
+  
     def _worker(self, work_queue, result_queue, index):
         """
         Pulls an item from the queue and runs it, then puts the result into
@@ -3056,7 +3108,8 @@ class IOStackThreadPool(object):
         
         old_read, old_write = (0,0) # The first request assumes that the disk is being used
         old_iowait = self._getCPUIOWait()
-      
+        old_time = time.time()
+        new_time = time.time()
         while True:
             item = work_queue.get()
             if item is None:
@@ -3067,73 +3120,47 @@ class IOStackThreadPool(object):
             queued = False
             i = 0
             #Calculate the attained BW
-            mb , starttime = self._calculate_BW[index]
-            totaltime = time.time() - starttime 
-            totalsize = mb
-            if mb > 0:
-                self._calculated_BW[index] = ( mb / float( time.time() - starttime ) )
-                #logging.warning("%(index)s %(calculated)s > %(needed)s",{'index':index,'calculated':self._calculated_BW[index],'needed':self._needed_BW[index]})
-                    
-
+            totaltime, totalsize = self.update_bw_stats(index)
+         
             #update disk sta
             if disk is not None:
+                new_time = time.time()
                 new_read, new_write = self._getDiskStats(disk[0:-1])
                 diff_read, diff_write = ((new_read - old_read) , (new_write - old_write))
+                diff_time = float(new_time - old_time)
                 old_read, old_write = (new_read, new_write)
-                
+                old_time = new_time
                 self._oldTransfer = self._lastTransfer
                 self._lastTransfer = 0
+                total_used = diff_read + diff_write
+
+                if (total_used == 0): total_used = 1
+                if (diff_time == 0): diff_time = 0.1
+
+                self._RealBWt = (total_used/(1024.0*1024.0)) / diff_time
 
             else: diff_read, diff_write = (0, 0)
 
             new_iowait = self._getCPUIOWait()
             diff_iowait = new_iowait - old_iowait
             old_iowait = new_iowait
-
+            priority = 0    # Highest priority 
             # If our BW is higher
-            if (self._calculated_BW[index] > (self._needed_BW[index] + 1)):
+            if (self._calculated_BW[index] > (self._needed_BW[index] + 0.2)):
+                priority = 7
+            #if (False):
+                #logging.warning("I go ahead %(bws)s of %(bw)s rate",{ 'bws':self._calculated_BW[index], 'bw': self._needed_BW[index]})
+
                 # Check that we need BW in other queues
                 # TODO : Priorities can be used to minimize the BW difference.
-
-                needed = False
-                for i in xrange(self.nthreads):
-                    if (i == index or self._indexworker[i] == -1): continue
-                    # Reinitialize the counter, if the last request has been a long time ago, the stream should be closed
-                    # We do not compite anymore with that stream
-                    if ((time.time() - self._last_REQ[i]) > 10): # 10 seconds
-                        logging.warning("%(i)s Destroying Queue Timeout",{'i':i})
-                   
-                        self._last_REQ[i] = 0 
-                        
-                        self._indexworker[i] = -1
-                        for worker in self._worker2disk:
-                            if self._worker2disk[worker] == i:
-                                del self._worker2disk[worker]
-                                break
-                        # If the candidate workqueue is the last one, we pop and decrease the number of threads
-                        if (i == self.nthreads-1):
-                            self._run_queues[i].put(None)
-                            self._indexworker.pop()
-                            self._last_REQ.pop()
-                            self._calculated_BW.pop()
-                            self._calculate_BW.pop()
-                            self._needed_BW.pop()
-                            
-                            thr = self._threads.pop()
-                            thr.join()
-                            self._result_queues.pop()
-                            self.nthreads = self.nthreads-1 # CHECK xrange will work after we do this?
-                        continue
-                    elif (self._last_REQ[i] == 0): continue
-                    elif (self._calculated_BW[i] < self._needed_BW[i]):      
-                        needed = True
-                        break
+                needed = self.checkOtherQueues (index)
+                #needed = True
                 # We may need BW in other worker (in the same object store), so wait for it
                 if needed:
                    #work_queue.put(item)
                     needed_elapsed = totalsize/self._needed_BW[index]
                     total_wait = needed_elapsed-totaltime
-                    logging.warning("%(index)s Waiting %(waiting)s seconds because BW is higher %(calculated)s > %(needed)s and %(i)s is %(icalculated)s < %(ineeded)s",{'index':index,'waiting':total_wait, 'calculated':self._calculated_BW[index],'needed':self._needed_BW[index], 'i':i, 'icalculated':self._calculated_BW[i], 'ineeded':self._needed_BW[i]})
+                    #logging.warning("%(index)s Waiting %(waiting)s seconds because BW is higher %(calculated)s > %(needed)s and %(i)s is %(icalculated)s < %(ineeded)s",{'index':index,'waiting':total_wait, 'calculated':self._calculated_BW[index],'needed':self._needed_BW[index], 'i':i, 'icalculated':self._calculated_BW[i], 'ineeded':self._needed_BW[i]})
                     sleep(min(total_wait,5.0))
                     queued = True
                 else:
@@ -3142,12 +3169,12 @@ class IOStackThreadPool(object):
                     # oldTransfer has the bytes transferred by this object server at the last iteration, however it not accurate as total used includes kernel prefetching activities
                                     
                     ioqueue = self._getDiskIOQueue(disk[0:-1])
-                    total_used = diff_read + diff_write
-                    if ( (ioqueue > 0) and (total_used > self._oldTransfer*2) ): #and (diff_iowait > 0) 
+                    
+                    if ( (ioqueue > 1) and (total_used > self._oldTransfer*2) ): #and (diff_iowait > 0) 
                         #work_queue.put(item)
                         needed_elapsed = totalsize/self._needed_BW[index]
                         total_wait = needed_elapsed-totaltime
-                        logging.warning("%(index)s Shared Disk %(waiting)s seconds, used %(bytes)s, iowait %(iowait)s, ioqueue %(ioqueue)s, real transfer %(real)s BW : %(calculated)s > %(needed)s",{'index':index,'waiting':total_wait,'bytes':(diff_read + diff_write), 'iowait':diff_iowait, 'ioqueue':ioqueue, 'real':self._oldTransfer,'calculated':self._calculated_BW[index],'needed':self._needed_BW[index]})
+                        #logging.warning("%(index)s Shared Disk %(waiting)s seconds, used %(bytes)s, iowait %(iowait)s, ioqueue %(ioqueue)s, real transfer %(real)s BW : %(calculated)s > %(needed)s",{'index':index,'waiting':total_wait,'bytes':(diff_read + diff_write), 'iowait':diff_iowait, 'ioqueue':ioqueue, 'real':self._oldTransfer,'calculated':self._calculated_BW[index],'needed':self._needed_BW[index]})
                         # In that situation, we should not wait forever, we should wait only a few seconds
                         # and check again if the disk situation has stabilized.
                         # If not we may see total_wait of xxx seconds in order to fit the needed BW
@@ -3170,9 +3197,15 @@ class IOStackThreadPool(object):
             try:
                 result = func(*args, **kwargs)
                 size = args[0]/(1024.0*1024.0)
+                p = psutil.Process(os.getpid())
+                ioclass, iodata = p.get_ionice()
+                p.set_ionice(2,priority)  # MAX priority
+              
+                #logging.warning("%(index)s PSUtil %(p)s -> %(ioclass)s %(iodata)s",{'index':index,'p':p,'ioclass':ioclass, 'iodata':iodata})
                 mb, starttime = self._calculate_BW[index]
                 result_queue.put((ev, True, result))
                 self._calculate_BW[index] = (mb + size, starttime)
+
                 self._calculated_BW[index] = ((mb+size)) / float( time.time() - starttime )
                 self._last_REQ[index] = time.time()
             except BaseException:
@@ -3333,7 +3366,9 @@ class IOStackThreadPool(object):
         # blocks this greenlet (and only *this* greenlet) until the real
         # thread calls ev.send().
         result = ev.wait()
-        return result
+        if (self._calculated_BW[queue_num] < (self._needed_BW[queue_num]-2) and random.randint(0,100) > 90):
+            logging.warning("MB: %(account)s %(bw)s of %(bws)s",{'account':account,'bw':self._calculated_BW[queue_num] ,'bws': self._needed_BW[queue_num]})
+        return (result)
 
     def _run_in_eventlet_tpool(self, func, *args, **kwargs):
         """

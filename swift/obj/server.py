@@ -543,6 +543,7 @@ class ObjectController(BaseStorageServer):
                         'Content-Encoding']
                 except KeyError:
                     pass
+                
                 response.headers['X-Timestamp'] = file_x_ts.normal
                 response.headers['X-Backend-Timestamp'] = file_x_ts.internal
                 resp = request.get_response(response)
