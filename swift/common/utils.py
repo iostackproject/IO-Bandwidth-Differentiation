@@ -37,6 +37,7 @@ from urllib import quote as _quote
 from contextlib import contextmanager, closing
 import ctypes
 import ctypes.util
+
 from ConfigParser import ConfigParser, NoSectionError, NoOptionError, \
     RawConfigParser
 from optparse import OptionParser
@@ -73,6 +74,7 @@ import psutil
 # logging doesn't import patched as cleanly as one would like
 from logging.handlers import SysLogHandler
 import logging
+from ctypes import *
 logging.thread = eventlet.green.thread
 logging.threading = eventlet.green.threading
 logging._lock = logging.threading.RLock()
@@ -3105,7 +3107,12 @@ class IOStackThreadPool(object):
         """
 
         # BW Control
+
         
+        augread = cdll.LoadLibrary('/usr/lib/libiostackmodule.so')
+
+        firstRequest = False  # Is the first Request? Then read as usually, to open the fd/fp 
+        requestno = 0
         old_read, old_write = (0,0) # The first request assumes that the disk is being used
         old_iowait = self._getCPUIOWait()
         old_time = time.time()
@@ -3115,7 +3122,7 @@ class IOStackThreadPool(object):
             if item is None:
                 break
 
-            ev, disk, func, args, kwargs = item
+            ev, disk, fp, func, args, kwargs = item
 
             queued = False
             i = 0
@@ -3153,27 +3160,27 @@ class IOStackThreadPool(object):
 
                 # Check that we need BW in other queues
                 # TODO : Priorities can be used to minimize the BW difference.
-                needed = self.checkOtherQueues (index)
-                #needed = True
+#                needed = self.checkOtherQueues (index)
+#                needed = True
                 # We may need BW in other worker (in the same object store), so wait for it
-                if needed:
-                   #work_queue.put(item)
-                    needed_elapsed = totalsize/self._needed_BW[index]
-                    total_wait = needed_elapsed-totaltime
+#                if needed:
+                    #work_queue.put(item)
+#                   needed_elapsed = totalsize/self._needed_BW[index]
+#                   total_wait = needed_elapsed-totaltime
                     #logging.warning("%(index)s Waiting %(waiting)s seconds because BW is higher %(calculated)s > %(needed)s and %(i)s is %(icalculated)s < %(ineeded)s",{'index':index,'waiting':total_wait, 'calculated':self._calculated_BW[index],'needed':self._needed_BW[index], 'i':i, 'icalculated':self._calculated_BW[i], 'ineeded':self._needed_BW[i]})
-                    sleep(min(total_wait,5.0))
-                    queued = True
-                else:
+#                    sleep(min(total_wait,5.0))
+                    #queued = True
+#                else:
                     # We may share the same device with other processes, and we don't need the BW so
                     # we should not be greedy
                     # oldTransfer has the bytes transferred by this object server at the last iteration, however it not accurate as total used includes kernel prefetching activities
                                     
-                    ioqueue = self._getDiskIOQueue(disk[0:-1])
+#                    ioqueue = self._getDiskIOQueue(disk[0:-1])
                     
-                    if ( (ioqueue > 1) and (total_used > self._oldTransfer*2) ): #and (diff_iowait > 0) 
+#                    if ( (ioqueue > 1) and (total_used > self._oldTransfer*2) ): #and (diff_iowait > 0) 
                         #work_queue.put(item)
-                        needed_elapsed = totalsize/self._needed_BW[index]
-                        total_wait = needed_elapsed-totaltime
+#                        needed_elapsed = totalsize/self._needed_BW[index]
+#                        total_wait = needed_elapsed-totaltime
                         #logging.warning("%(index)s Shared Disk %(waiting)s seconds, used %(bytes)s, iowait %(iowait)s, ioqueue %(ioqueue)s, real transfer %(real)s BW : %(calculated)s > %(needed)s",{'index':index,'waiting':total_wait,'bytes':(diff_read + diff_write), 'iowait':diff_iowait, 'ioqueue':ioqueue, 'real':self._oldTransfer,'calculated':self._calculated_BW[index],'needed':self._needed_BW[index]})
                         # In that situation, we should not wait forever, we should wait only a few seconds
                         # and check again if the disk situation has stabilized.
@@ -3181,11 +3188,11 @@ class IOStackThreadPool(object):
                         # However, here is another situation where we need to push a "timeout" renewal into the proxy
                         # as we may not progress if the situation does not changes.
                         # As alternatives we can have a counter and push that request even if the BW is broken. 
-                        sleep(min(total_wait,5.0))
-                        queued = True
+#                        sleep(min(total_wait,5.0))
+                      #  queued = True
 
-                if queued: 
-                    queued = False
+                #if queued: 
+                 #   queued = False
                    # continue
                 # TODO Do we have multi-items per queue ?, then we need to recognize them, an put some
                 # priority queue, but it needs to be highly mutable.
@@ -3195,13 +3202,38 @@ class IOStackThreadPool(object):
                        
 
             try:
-                result = func(*args, **kwargs)
+                """ 
+                We were unable to force a blocking read inside the worker thread.
+                All the blocking I/O goes automatically to a greenthread, with an unknown
+                pid.
+                It works at libc level, so we cannot intercept it.
+                and hence we cannot setup the priority. However, creating an external .so file with an 
+                augmentedRead worked as expected.
+                """
+               # requestno = requestno + 1
+                if (firstRequest):
+                    firstRequest = False
+                    result = func(*args, **kwargs)
+                else:
+                    fd = fp.fileno()
+            
+                    buffer = create_string_buffer(int(args[0]))
+                 
+                    error = augread.augmentedRead (c_int(fd), byref(buffer), c_int(args[0]),priority)
+                    #logging.warning("Value %(error)s",{'error':error})
+                    if (error < 0):
+                        raise Exception("Size")
+                    elif (error == 0):
+                        result = ""
+                    else:
+                        result = str(buffer.raw)
+
+                #logging.warning("Value %(result)s",{'result':error})
+                
+
                 size = args[0]/(1024.0*1024.0)
-                p = psutil.Process(os.getpid())
-                ioclass, iodata = p.get_ionice()
-                p.set_ionice(2,priority)  # MAX priority
-              
-                #logging.warning("%(index)s PSUtil %(p)s -> %(ioclass)s %(iodata)s",{'index':index,'p':p,'ioclass':ioclass, 'iodata':iodata})
+                
+                #logging.warning("%(index)s PSUtil %(p)s -> %(args)s",{'index':index,'p':fp,'args':args})
                 mb, starttime = self._calculate_BW[index]
                 result_queue.put((ev, True, result))
                 self._calculate_BW[index] = (mb + size, starttime)
@@ -3209,6 +3241,7 @@ class IOStackThreadPool(object):
                 self._calculated_BW[index] = ((mb+size)) / float( time.time() - starttime )
                 self._last_REQ[index] = time.time()
             except BaseException:
+                #logging.warning("Exception %(result)s",{'result':result})
                 result_queue.put((ev, False, sys.exc_info()))
             finally:
                 self._lastTransfer = args[0] + self._lastTransfer
@@ -3271,14 +3304,14 @@ class IOStackThreadPool(object):
         ev = event.Event()
         queue_num = random.randint(0,self.nthreads-1) 
         disk = None
-        self._run_queues[queue_num].put((ev, disk, func, args, kwargs), block=False)
+        self._run_queues[queue_num].put((ev, disk, fp, func, args, kwargs), block=False)
         logging.warning("I am running with this params  %(parameters)s",{'parameters':self})
         # blocks this greenlet (and only *this* greenlet) until the real
         # thread calls ev.send().
         result = ev.wait()
         return result
 
-    def run_in_thread_shaping(self, account, data_file, limit, func, *args, **kwargs):
+    def run_in_thread_shaping(self, account, data_file, limit, fp, func, *args, **kwargs):
         """
         Runs func(*args, **kwargs) in a thread. Blocks the current greenlet
         until results are available.
@@ -3362,12 +3395,12 @@ class IOStackThreadPool(object):
         # Find the major, minor and compare it with "ls -ltr /dev/sd*" or use /proc/mounts or mount | cut -f 1,3 -d ' '
         disk = "sdc1"
         #
-        self._run_queues[queue_num].put((ev, disk, func, args, kwargs), block=False)
+        self._run_queues[queue_num].put((ev, disk, fp, func, args, kwargs), block=False)
         # blocks this greenlet (and only *this* greenlet) until the real
         # thread calls ev.send().
         result = ev.wait()
-        if (self._calculated_BW[queue_num] < (self._needed_BW[queue_num]-2) and random.randint(0,100) > 90):
-            logging.warning("MB: %(account)s %(bw)s of %(bws)s",{'account':account,'bw':self._calculated_BW[queue_num] ,'bws': self._needed_BW[queue_num]})
+        #if (self._calculated_BW[queue_num] < (self._needed_BW[queue_num]-2) and random.randint(0,100) > 90):
+        #    logging.warning("MB: %(account)s %(bw)s of %(bws)s",{'account':account,'bw':self._calculated_BW[queue_num] ,'bws': self._needed_BW[queue_num]})
         return (result)
 
     def _run_in_eventlet_tpool(self, func, *args, **kwargs):

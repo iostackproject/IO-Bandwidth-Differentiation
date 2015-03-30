@@ -1,33 +1,41 @@
 # BW Differentiation tests
 
 Modifications to ThreadPool to assess a BW per object.
-* Hardcoded -> BW Requirements, disk and object differentiation
-* Hardcoded -> 4 threads per object store (we test with 4 streams)
-* 1 thread/queue per stream
-* Each queue checks if other queues need BW.
 
-* We added controls to avoid interfering processes using the same devices
-	* We use disk_read / disk_write and io_wait values.
-	* io_wait is used to find if the disk is overloaded or not, so we can 
-	  actually ask more bw even if it is shared
-	* Those controls are useful in the All-in-One deployment, but they need to be tuned
-	* We added another metric (elements in the disk queue), that seems better, but still 
-	  disk / setup dependent.
-	* TODO: Look for other metrics to find when we can issue more requests to the disk,
-	* Disk characterization shouldn't be the best way as different patterns had different 
-	  performances
-	* TRY: IOWAit seconds per second.
-
-* TODO: Shared queues, a queue may have requests from different tenants, so 
-  instead of waiting, we just enqueue and get a new value. If all the tenants
-  need waiting setup a small sleep, because we may get other elements in the queue
-  that may be served at higher speed. I would prefer dynamic queues as it is more cleaner
-  and eventlets can do a good job there.
+* IOStackThreadPool automatically creates a worker per data stream. 
+* Using the eventlet model, all the reads go to a different thread.
+* Using ioprio is not possible due to that problem, so we tried 
+  different alternatives to use directly read system call. However,
+  read from libc is monkey_patched and is moved to another thread
+  automatically.
+* We created an external (C) augmentedRead accepting a priority value,
+  working as expected. We still have thread switching not being able to 
+  fix it, but at least the priority value can be setup accordingly.
+* As we are now setting up, priority values we can avoid the interference 
+  controls.
 
 
 
+* We tried HTTP proxy alternatives but they do not work as expected, as the stream
+  is provided directly by the object servers, so we may need to go lower level.
+
+* We also tried middleware coding, but we are only using it to monitor and get information
+about the object server used instant BW (using some external utility)
 
 
+# Compilation of external code
+ * gcc -c -fPIC iostackmodule.c -o iostackmodule.o 
+ * gcc -shared -Wl,-soname,libiostackmodule.so -o libiostackmodule.so iostackmodule.o
+ * cp to a suitable location (i.e., /usr/lib/libiostackmodule.so)
+
+# BWGatherer.py
+  Creates a /tmp/bwfile with disk BW information each second, the file will be used
+  to provide BW statistics to the proxy so it can select an object server
+
+
+We still have the device and the "needed BW" information hard coded.
+Finally, we will need some extra testing to see if 
+the extra priority information is working as intended. 
 
 # Swift
 

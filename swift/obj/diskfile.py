@@ -955,7 +955,7 @@ class DiskFileReader(object):
         self._md5_of_sent_bytes = None
         self._suppress_file_closing = False
         self._quarantined_dir = None
-        self._limit = random.randint(10,70) 
+        self._limit = random.randint(10,80) 
     
     def __iter__(self):
         """Returns an iterator over the data file."""
@@ -970,9 +970,8 @@ class DiskFileReader(object):
                 self._iter_etag = hashlib.md5()
 
             while True:
-                chunk = self._threadpool.run_in_thread_shaping(self._account,self._data_file, self._limit,
+                chunk = self._threadpool.run_in_thread_shaping(self._account,self._data_file,  self._limit,self._fp,
                     self._fp.read, self._disk_chunk_size)
-               
                 if chunk:
                     if self._iter_etag:
                         self._iter_etag.update(chunk)
