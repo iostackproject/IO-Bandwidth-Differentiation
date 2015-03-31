@@ -3111,12 +3111,13 @@ class IOStackThreadPool(object):
         
         augread = cdll.LoadLibrary('/usr/lib/libiostackmodule.so')
 
-        firstRequest = False  # Is the first Request? Then read as usually, to open the fd/fp 
+        originalRead = False  # Use the originalRead
         requestno = 0
         old_read, old_write = (0,0) # The first request assumes that the disk is being used
         old_iowait = self._getCPUIOWait()
         old_time = time.time()
         new_time = time.time()
+        self._lastTransfer = 0
         while True:
             item = work_queue.get()
             if item is None:
@@ -3154,7 +3155,7 @@ class IOStackThreadPool(object):
             priority = 0    # Highest priority 
             # If our BW is higher
             if (self._calculated_BW[index] > (self._needed_BW[index] + 0.2)):
-                priority = 7
+                priority = 0
             #if (False):
                 #logging.warning("I go ahead %(bws)s of %(bw)s rate",{ 'bws':self._calculated_BW[index], 'bw': self._needed_BW[index]})
 
@@ -3211,8 +3212,7 @@ class IOStackThreadPool(object):
                 augmentedRead worked as expected.
                 """
                # requestno = requestno + 1
-                if (firstRequest):
-                    firstRequest = False
+                if (originalRead or fp is None):
                     result = func(*args, **kwargs)
                 else:
                     fd = fp.fileno()
@@ -3231,20 +3231,23 @@ class IOStackThreadPool(object):
                 #logging.warning("Value %(result)s",{'result':error})
                 
 
-                size = args[0]/(1024.0*1024.0)
                 
-                #logging.warning("%(index)s PSUtil %(p)s -> %(args)s",{'index':index,'p':fp,'args':args})
-                mb, starttime = self._calculate_BW[index]
                 result_queue.put((ev, True, result))
-                self._calculate_BW[index] = (mb + size, starttime)
+                #logging.warning("%(index)s PSUtil %(p)s -> %(args)s",{'index':index,'p':fp,'args':args})
+                if (fp is not None):
+                    size = args[0]/(1024.0*1024.0)
+                    mb, starttime = self._calculate_BW[index]
+                    
+                    self._calculate_BW[index] = (mb + size, starttime)
 
-                self._calculated_BW[index] = ((mb+size)) / float( time.time() - starttime )
+                    self._calculated_BW[index] = ((mb+size)) / float( time.time() - starttime )
                 self._last_REQ[index] = time.time()
             except BaseException:
                 #logging.warning("Exception %(result)s",{'result':result})
                 result_queue.put((ev, False, sys.exc_info()))
             finally:
-                self._lastTransfer = args[0] + self._lastTransfer
+                if (fp is not None): 
+                    self._lastTransfer = args[0] + self._lastTransfer
                 work_queue.task_done()
                 os.write(self.wpipe, u'%05d' % index)  # this byte represents which queue we are working
                 
@@ -3304,6 +3307,7 @@ class IOStackThreadPool(object):
         ev = event.Event()
         queue_num = random.randint(0,self.nthreads-1) 
         disk = None
+        fp = None
         self._run_queues[queue_num].put((ev, disk, fp, func, args, kwargs), block=False)
         logging.warning("I am running with this params  %(parameters)s",{'parameters':self})
         # blocks this greenlet (and only *this* greenlet) until the real
