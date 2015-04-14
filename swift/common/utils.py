@@ -2983,18 +2983,6 @@ class IOStackThreadPool(object):
         _raw_rpipe, self.wpipe = os.pipe()
         self.rpipe = greenio.GreenPipe(_raw_rpipe, 'rb', bufsize=0)
         
-        for _junk in xrange(nthreads):
-            rq = Queue()
-            resq = Queue()
-            self._run_queues.append(rq)
-            self._result_queues.append(resq)
-            thr = stdlib_threading.Thread(
-                target=self._worker,
-                args=(self._run_queues[_junk], self._result_queues[_junk],_junk))
-            thr.daemon = True
-            thr.start()
-            self._threads.append(thr)
-
         # This is the result-consuming greenthread that runs in the main OS
         # thread, as described above.
 
@@ -3155,13 +3143,13 @@ class IOStackThreadPool(object):
             priority = 0    # Highest priority 
             # If our BW is higher
             if (self._calculated_BW[index] > (self._needed_BW[index] + 0.2)):
-                priority = 0
+                priority = 7
             #if (False):
                 #logging.warning("I go ahead %(bws)s of %(bw)s rate",{ 'bws':self._calculated_BW[index], 'bw': self._needed_BW[index]})
 
                 # Check that we need BW in other queues
                 # TODO : Priorities can be used to minimize the BW difference.
-#                needed = self.checkOtherQueues (index)
+                needed = self.checkOtherQueues (index) # to remove not used threads.
 #                needed = True
                 # We may need BW in other worker (in the same object store), so wait for it
 #                if needed:
