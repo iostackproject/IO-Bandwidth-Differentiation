@@ -540,7 +540,6 @@ class DiskFileManager(object):
         self.replication_lock_timeout = int(conf.get(
             'replication_lock_timeout', 15))
         threads_per_disk = int(conf.get('threads_per_disk', '0'))
-        threads_per_disk = 4
         self.threadpools = defaultdict(
             lambda: IOStackThreadPool(nthreads=threads_per_disk))
         #self.threadpools = defaultdict(

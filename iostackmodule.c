@@ -47,3 +47,13 @@ int error = 0;
     error = read (fd,buffer,size);
 return error;
 }
+
+int normalRead (int fd, char * buffer, int size)
+{
+    return read (fd,buffer,size);
+}
+
+int gettid()
+{ 
+    return syscall(SYS_gettid);
+}
