@@ -1868,6 +1868,18 @@ def write_pickle(obj, dest, tmp=None, pickle_protocol=0):
         os.fsync(fd)
         renamer(tmppath, dest)
 
+def load_iostackmodule():
+    """
+    Loads the iostackmoeule.so
+    The path tho this library must be edited in SWIFT_CONF_FILE file.
+    """
+    conf = readconf(SWIFT_CONF_FILE, 'usrlibs')
+    try:
+        libiostack = cdll.LoadLibrary(conf['iostackmodule'])
+        return libiostack
+    except OSError as err:
+       sys.exit(_("ERROR: Unable to load iostackmodule in %s") % conf['iostackmodule'])
+
 
 def search_tree(root, glob_match, ext='', exts=None, dir_ext=None):
     """Look in root, for any files/dirs matching glob, recursively traversing
@@ -2949,6 +2961,7 @@ class IOStackThreadPool(object):
         self._calculated_BW = []
         self._calculate_BW = []
 
+        self._augread = load_iostackmodule()
 
         self._needed_BW = []
         self._last_REQ = []
@@ -3054,7 +3067,7 @@ class IOStackThreadPool(object):
         # BW Control
 
         
-        augread = cdll.LoadLibrary('/usr/lib/libiostackmodule.so')
+        #augread = cdll.LoadLibrary('/usr/lib/libiostackmodule.so')
         _libc_getpid = load_libc_function('accept', fail_if_missing=True)
 
         originalRead = True  # Use the originalRead
@@ -3082,7 +3095,7 @@ class IOStackThreadPool(object):
                 """
                 
                 if (self._last_Prio[index] != priority):
-                    p = psutil.Process(augread.gettid())
+                    p = psutil.Process(self._augread.gettid())
                     if (priority == 0):
                         p.set_ionice(2,0)
                     else: p.set_ionice(3)

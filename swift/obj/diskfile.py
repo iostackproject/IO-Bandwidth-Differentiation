@@ -634,13 +634,13 @@ class DiskFileManager(object):
         self.logger.increment('async_pendings')
 
     def get_diskfile(self, device, partition, account, container, obj,
-                     policy_idx=0, **kwargs):
+                     bwlimit, policy_idx=0, **kwargs):
         dev_path = self.get_dev_path(device)
         if not dev_path:
             raise DiskFileDeviceUnavailable()
         return DiskFile(self, dev_path, self.threadpools[device],
                         partition, account, container, obj,
-                        policy_idx=policy_idx,
+                        bwlimit, policy_idx=policy_idx,
                         use_splice=self.use_splice, pipe_size=self.pipe_size,
                         **kwargs)
 
@@ -922,7 +922,7 @@ class DiskFileReader(object):
     :param keep_cache: should resulting reads be kept in the buffer cache
     """
     
-    def __init__(self, fp, account, data_file, obj_size, etag, threadpool,
+    def __init__(self, fp, account, data_file, obj_size, bwlimit, etag, threadpool,
                  disk_chunk_size, keep_cache_size, device_path, logger,
                  quarantine_hook, use_splice, pipe_size, keep_cache=False):
         # Parameter tracking
@@ -954,7 +954,7 @@ class DiskFileReader(object):
         self._md5_of_sent_bytes = None
         self._suppress_file_closing = False
         self._quarantined_dir = None
-        self._limit = random.randint(10,40) 
+        self._limit = int(bwlimit)
     
     def __iter__(self):
         """Returns an iterator over the data file."""
@@ -1210,7 +1210,7 @@ class DiskFile(object):
     """
 
     def __init__(self, mgr, device_path, threadpool, partition,
-                 account=None, container=None, obj=None, _datadir=None,
+                 account=None, container=None, obj=None, bwlimit = None, _datadir=None,
                  policy_idx=0, use_splice=False, pipe_size=None):
         self._mgr = mgr
         self._device_path = device_path
@@ -1218,6 +1218,7 @@ class DiskFile(object):
         self._logger = mgr.logger
         self._disk_chunk_size = mgr.disk_chunk_size
         self._bytes_per_sync = mgr.bytes_per_sync
+        self._bwlimit = bwlimit
         self._use_splice = use_splice
         self._pipe_size = pipe_size
         if account and container and obj:
@@ -1586,7 +1587,7 @@ class DiskFile(object):
         """
         dr = DiskFileReader(
             self._fp, self._account, self._data_file, int(self._metadata['Content-Length']),
-            self._metadata['ETag'], self._threadpool, self._disk_chunk_size,
+            self._bwlimit, self._metadata['ETag'], self._threadpool, self._disk_chunk_size,
             self._mgr.keep_cache_size, self._device_path, self._logger,
             use_splice=self._use_splice, quarantine_hook=_quarantine_hook,
             pipe_size=self._pipe_size, keep_cache=keep_cache)

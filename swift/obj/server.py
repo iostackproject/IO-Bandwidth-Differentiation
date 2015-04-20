@@ -41,7 +41,7 @@ from swift.common.exceptions import ConnectionTimeout, DiskFileQuarantined, \
 from swift.obj import ssync_receiver
 from swift.common.http import is_success
 from swift.common.base_storage_server import BaseStorageServer
-from swift.common.request_helpers import get_name_and_placement, \
+from swift.common.request_helpers import get_bwlimit, get_name_and_placement, \
     is_user_meta, is_sys_or_user_meta
 from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPCreated, \
     HTTPInternalServerError, HTTPNoContent, HTTPNotFound, \
@@ -156,7 +156,7 @@ class ObjectController(BaseStorageServer):
             conf.get('replication_failure_ratio') or 1.0)
 
     def get_diskfile(self, device, partition, account, container, obj,
-                     policy_idx, **kwargs):
+                     bwlimit, policy_idx, **kwargs):
         """
         Utility method for instantiating a DiskFile object supporting a given
         REST API.
@@ -166,7 +166,7 @@ class ObjectController(BaseStorageServer):
         behavior.
         """
         return self._diskfile_mgr.get_diskfile(
-            device, partition, account, container, obj, policy_idx, **kwargs)
+            device, partition, account, container, obj, bwlimit, policy_idx, **kwargs)
 
     def async_update(self, op, account, container, obj, host, partition,
                      contdevice, headers_out, objdevice, policy_index):
@@ -509,12 +509,13 @@ class ObjectController(BaseStorageServer):
         """Handle HTTP GET requests for the Swift Object Server."""
         device, partition, account, container, obj, policy_idx = \
             get_name_and_placement(request, 5, 5, True)
+        bwlimit = get_bwlimit(request)
         keep_cache = self.keep_cache_private or (
             'X-Auth-Token' not in request.headers and
             'X-Storage-Token' not in request.headers)
         try:
             disk_file = self.get_diskfile(
-                device, partition, account, container, obj,
+                device, partition, account, container, obj, bwlimit,
                 policy_idx=policy_idx)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)

@@ -78,6 +78,14 @@ def get_listing_content_type(req):
         raise HTTPNotAcceptable(request=req)
     return out_content_type
 
+def get_bwlimit(request):
+    """
+    Utility function to get the bwlimit value from the HTTP header.
+
+    :returns: value from the bwlimit header (-1 if not fount)
+    """
+    bwlimit = request.headers.get('Bwlimit', '-1')
+    return bwlimit
 
 def get_name_and_placement(request, minsegs=1, maxsegs=None,
                            rest_with_last=False):
