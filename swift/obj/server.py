@@ -348,7 +348,7 @@ class ObjectController(BaseStorageServer):
                                   content_type='text/plain')
         try:
             disk_file = self.get_diskfile(
-                device, partition, account, container, obj,
+                device, partition, account, container, obj, bwlimit=None,
                 policy_idx=policy_idx)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
@@ -406,7 +406,7 @@ class ObjectController(BaseStorageServer):
                                   content_type='text/plain')
         try:
             disk_file = self.get_diskfile(
-                device, partition, account, container, obj,
+                device, partition, account, container, obj, bwlimit=None,
                 policy_idx=policy_idx)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
@@ -515,7 +515,7 @@ class ObjectController(BaseStorageServer):
             'X-Storage-Token' not in request.headers)
         try:
             disk_file = self.get_diskfile(
-                device, partition, account, container, obj, bwlimit,
+                device, partition, account, container, obj, bwlimit, 
                 policy_idx=policy_idx)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
@@ -566,7 +566,7 @@ class ObjectController(BaseStorageServer):
             get_name_and_placement(request, 5, 5, True)
         try:
             disk_file = self.get_diskfile(
-                device, partition, account, container, obj,
+                device, partition, account, container, obj, bwlimit=None,
                 policy_idx=policy_idx)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
@@ -609,7 +609,7 @@ class ObjectController(BaseStorageServer):
         req_timestamp = valid_timestamp(request)
         try:
             disk_file = self.get_diskfile(
-                device, partition, account, container, obj,
+                device, partition, account, container, obj, bwlimit=None,
                 policy_idx=policy_idx)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
