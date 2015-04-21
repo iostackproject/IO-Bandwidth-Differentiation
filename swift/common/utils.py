@@ -3079,43 +3079,55 @@ class IOStackThreadPool(object):
 
             ev, disk, fp, func, args, kwargs = item
 
-           
-            #Calculate the attained BW
-            totaltime, totalsize = self.update_bw_stats(index)
-            priority = 0    # Highest priority 
-            # If our BW is higher
-        
-            if (self._calculated_BW[index] > (self._needed_BW[index] + 0.2)):
-                priority = 7
-                
-            try:
-                """ 
-                GetPID does not return the correct thread id, so we need to use a gettid syscall.
+            if self._needed_BW[index] != -1:
+                #Calculate the attained BW
+                totaltime, totalsize = self.update_bw_stats(index)
+                priority = 0    # Highest priority 
+                # If our BW is higher
+            
+                if (self._calculated_BW[index] > (self._needed_BW[index] + 0.2)):
+                    priority = 7
+                    
+                try:
+                    """ 
+                    GetPID does not return the correct thread id, so we need to use a gettid syscall.
 
-                """
-                
-                if (self._last_Prio[index] != priority):
-                    p = psutil.Process(self._augread.gettid())
-                    if (priority == 0):
-                        p.set_ionice(2,0)
-                    else: p.set_ionice(3)
-                    self._last_Prio[index] = priority
-                result = func(*args, **kwargs)
-                
-                result_queue.put((ev, True, result))
-               
-                if (fp is not None):
-                    size = args[0]/(1024.0*1024.0)
-                    mb, starttime = self._calculate_BW[index]
-                    self._calculate_BW[index] = (mb + size, starttime)
+                    """
+                    
+                    if (self._last_Prio[index] != priority):
+                        p = psutil.Process(self._augread.gettid())
+                        if (priority == 0):
+                            p.set_ionice(2,0)
+                        else: p.set_ionice(3)
+                        self._last_Prio[index] = priority
+                    result = func(*args, **kwargs)
+                    
+                    result_queue.put((ev, True, result))
+                   
+                    if (fp is not None):
+                        size = args[0]/(1024.0*1024.0)
+                        mb, starttime = self._calculate_BW[index]
+                        self._calculate_BW[index] = (mb + size, starttime)
 
-                self._last_REQ[index] = time.time()
-            except BaseException:
-                #logging.warning("Exception %(result)s",{'result':result})
-                result_queue.put((ev, False, sys.exc_info()))
-            finally:
-                work_queue.task_done()
-                os.write(self.wpipe, u'%05d' % index)  # this byte represents which queue we are working
+                    self._last_REQ[index] = time.time()
+                except BaseException:
+                    #logging.warning("Exception %(result)s",{'result':result})
+                    result_queue.put((ev, False, sys.exc_info()))
+                finally:
+                    work_queue.task_done()
+                    os.write(self.wpipe, u'%05d' % index)  # this byte represents which queue we are working
+            else:
+                try:
+                    #No BW differentiation
+                    result = func(*args, **kwargs)
+                    result_queue.put((ev, True, result))
+                    self._last_REQ[index] = time.time()
+                except BaseException:
+                    #logging.warning("Exception %(result)s",{'result':result})
+                    result_queue.put((ev, False, sys.exc_info()))
+                finally:
+                    work_queue.task_done()
+                    os.write(self.wpipe, u'%05d' % index)  # this byte represents which queue we are working
                 
     def _consume_results(self, queue):
         """
@@ -3273,9 +3285,7 @@ class IOStackThreadPool(object):
                 self.nthreads = self.nthreads + 1 
                 logging.warning("I have created a new queue %(queue)s/%(total)s for %(disk)s / %(account)s at %(bw)s rate",{'queue':queue_num, 'disk':data_file , 'account':account, 'bw': self._needed_BW[index], 'total': self.nthreads})
   
-        #TODO : We should find the disk that maps the path found in the data_file (i.e., sdc1), it needs to be done with os.stat("/data_file").st_dev
-        # Find the major, minor and compare it with "ls -ltr /dev/sd*" or use /proc/mounts or mount | cut -f 1,3 -d ' '
-        disk = "sdc1"
+        disk = None
         #
         self._run_queues[queue_num].put((ev, disk, fp, func, args, kwargs), block=False)
         # blocks this greenlet (and only *this* greenlet) until the real

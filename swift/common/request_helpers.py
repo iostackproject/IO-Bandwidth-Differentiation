@@ -82,7 +82,7 @@ def get_bwlimit(request):
     """
     Utility function to get the bwlimit value from the HTTP header.
 
-    :returns: value from the bwlimit header (-1 if not fount)
+    :returns: value from the bwlimit header (-1 if not found)
     """
     bwlimit = request.headers.get('Bwlimit', '-1')
     return bwlimit
