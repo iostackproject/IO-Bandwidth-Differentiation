@@ -954,7 +954,10 @@ class DiskFileReader(object):
         self._md5_of_sent_bytes = None
         self._suppress_file_closing = False
         self._quarantined_dir = None
-        self._limit = int(bwlimit)
+        if bwlimit:
+            self._limit = int(bwlimit)
+        else:
+            self._limit = None
     
     def __iter__(self):
         """Returns an iterator over the data file."""
