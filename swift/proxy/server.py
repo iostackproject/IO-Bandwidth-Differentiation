@@ -20,8 +20,12 @@ from swift import gettext_ as _
 from random import shuffle
 from time import time
 import itertools
-
+try:
+    import simplejson as json
+except ImportError:
+    import json
 from eventlet import Timeout
+from eventlet.green import urllib2
 
 from swift import __canonical_version__ as swift_version
 from swift.common import constraints
@@ -140,6 +144,9 @@ class Application(object):
         self.node_timings = {}
         self.timing_expiry = int(conf.get('timing_expiry', 300))
         self.sorting_method = conf.get('sorting_method', 'shuffle').lower()
+        self.verbose = False
+        self.suppress_errors = False
+        self.timeout = 5
         self.max_large_object_get_time = float(
             conf.get('max_large_object_get_time', '86400'))
         value = conf.get('request_node_count', '2 * replicas').lower().split()
@@ -380,6 +387,34 @@ class Application(object):
             self.logger.exception(_('ERROR Unhandled exception in request'))
             return HTTPServerError(request=req)
 
+    def scout_host(self, base_url, recon_type):
+        """
+        Perform the actual HTTP request to obtain swift recon telemtry.
+
+        :param base_url: the base url of the host you wish to check. str of the
+                        format 'http://127.0.0.1:6000/recon/'
+        :param recon_type: the swift recon check to request.
+        :returns: tuple of (recon url used, response body, and status)
+        """
+        url = base_url + recon_type
+        try:
+            body = urllib2.urlopen(url, timeout=self.timeout).read()
+            content = json.loads(body)
+            if self.verbose:
+                print("-> %s: %s" % (url, content))
+            status = 200
+        except urllib2.HTTPError as err:
+            if not self.suppress_errors or self.verbose:
+                print("-> %s: %s" % (url, err))
+            content = err
+            status = err.code
+        except urllib2.URLError as err:
+            if not self.suppress_errors or self.verbose:
+                print("-> %s: %s" % (url, err))
+            content = err
+            status = -1
+        return url, content, status
+
     def sort_nodes(self, nodes):
         '''
         Sorts nodes in-place (and returns the sorted list) according to
@@ -395,19 +430,14 @@ class Application(object):
 
             timing=dict()
             for node in nodes:
-                getBW = "{ip}:{port}/bwinfo".format(**node)
-                conn = http_connect(node['ip'], node['port'],"bwinfo", "",
-                                'GET', "", headers="")
-                resp = conn.getresponse()
-                if is_success(resp.status):
-                    BWList = resp.read()  # Returns a "<device>  MBread MBWrite <device>..."
-
-                    splitlist = BWList.split('#')
+                base_url = "http://{ip}:{port}/recon/".format(**node)
+                url, content, status = self.scout_host(base_url, "bwinfo")
+                if is_success(status):
+                    splitlist = content.split('#')
                     nodedev = splitlist.pop(0)
                     try:
                         for element in splitlist:
                             dev,read,write = element.split()
-
                             if nodedev[:-1] == "/dev/" + dev:
                                 timing = float(read)+float(write) 
                                 node['timing']=timing
