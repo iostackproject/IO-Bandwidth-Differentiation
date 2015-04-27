@@ -2950,10 +2950,12 @@ class IOStackThreadPool(object):
     The bandwidth is a hard limit (on both sides) now.
 
     """
-    def __init__(self, nthreads=2):
+    def __init__(self, nthreads=2, identifier='object'):
         self.nthreads = nthreads
         self.nthreads = 0   # Threads are dynamically created by run_in_thread_shaping and destroyed in the worker 
                             # Destruction is done for the last Thread (queue based), but they can be reused.
+        self._id = identifier
+
         self._run_queues = []
         self._result_queues = []
         self._threads = []
@@ -3227,9 +3229,9 @@ class IOStackThreadPool(object):
         #    return result
 
         ev = event.Event()
-        identifier = data_file
+        identifier = (account if self._id == 'account' else data_file)
         #TODO : Should be externaly, or create - destroy each work queue per stream and maintain some dict. 
-      
+
         if identifier in self._worker2disk:
             # Extract Queue number
             queue_num = self._worker2disk[identifier]

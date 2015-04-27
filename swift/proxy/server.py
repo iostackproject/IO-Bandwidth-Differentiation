@@ -79,7 +79,6 @@ class Application(object):
             self.logger = logger
 
         self._error_limiting = {}
-
         swift_dir = conf.get('swift_dir', '/etc/swift')
         self.swift_dir = swift_dir
         self.node_timeout = int(conf.get('node_timeout', 10))
@@ -392,8 +391,8 @@ class Application(object):
         # (ie within the rounding resolution) won't prefer one over another.
         # Python's sort is stable (http://wiki.python.org/moin/HowTo/Sorting/)
         shuffle(nodes)
-
         if self.sorting_method == 'bw':
+
             timing=dict()
             for node in nodes:
                 getBW = "{ip}:{port}/bwinfo".format(**node)
@@ -401,20 +400,26 @@ class Application(object):
                                 'GET', "", headers="")
                 resp = conn.getresponse()
                 if is_success(resp.status):
-                    BWList = resp.read()  # Returns a "<device> MBread MBWrite <device>..."
+                    BWList = resp.read()  # Returns a "<device>  MBread MBWrite <device>..."
+
                     splitlist = BWList.split('#')
+                    nodedev = splitlist.pop(0)
                     try:
                         for element in splitlist:
                             dev,read,write = element.split()
-                            if (dev == 'sdc'): # TODO: Remove hardcoding, probably getting node['device'] and mapping it to the disk
-                                node['timing']=float(read)+float(write)
+
+                            if nodedev[:-1] == "/dev/" + dev:
+                                timing = float(read)+float(write) 
+                                node['timing']=timing
                     except Exception as e:
                         pass
                 #       
                     def key_func(node):
                         return node['timing']
 
+
                     nodes.sort(key=key_func)
+
 
         elif self.sorting_method == 'timing':
             now = time()
@@ -426,8 +431,10 @@ class Application(object):
         elif self.sorting_method == 'affinity':
             nodes.sort(key=self.read_affinity_sort_key)
 
-        #self.logger.error(_('List %s'),nodes)
+        #self.logger.error(_('List %s %s'),self.sorting_method, nodes)
 	return nodes
+
+
 
     def set_node_timing(self, node, timing):
         if self.sorting_method != 'timing':

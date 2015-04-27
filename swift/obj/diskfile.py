@@ -540,9 +540,11 @@ class DiskFileManager(object):
         self.replication_lock_timeout = int(conf.get(
             'replication_lock_timeout', 15))
         threads_per_disk = int(conf.get('threads_per_disk', '0'))
+        identifier = conf.get('bwdifferentiation', 'object')
+        
         self.threadpools = defaultdict(
-            lambda: IOStackThreadPool(nthreads=threads_per_disk))
-        #self.threadpools = defaultdict(
+            lambda: IOStackThreadPool(nthreads=threads_per_disk, identifier=identifier))
+        #self.threadpools = defaultdict(   
         #   lambda: ThreadPool(nthreads=threads_per_disk))
 
         self.use_splice = False
@@ -954,10 +956,8 @@ class DiskFileReader(object):
         self._md5_of_sent_bytes = None
         self._suppress_file_closing = False
         self._quarantined_dir = None
-        if bwlimit:
-            self._limit = int(bwlimit)
-        else:
-            self._limit = None
+        self._limit = (int(bwlimit) if bwlimit else None)
+
     
     def __iter__(self):
         """Returns an iterator over the data file."""
