@@ -13,34 +13,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os, stat, subprocess, shlex, re, sys
-from swift import gettext_ as _
+import os
+
 from swift.common.utils import cache_from_env, get_logger, register_swift_info
 from swift.common.swob import Request, Response
 
 
-class BWInfoMiddleware(object):
+class OSInfoMiddleware(object):
     """
-    Stores the BW info at /bwinfo
+    playground
     """
 
     def __init__(self, app, conf, logger=None):
         self.app = app
         self.conf = conf
         self.disable_path = conf.get('disable_path', '')
-        self.logger = logger or get_logger(conf, log_route='bwlimit')
-
-    def get_mount_point(self, path):
-        dev = os.stat(path).st_dev
-        major = os.major(dev)
-        minor = os.minor(dev)
-        out = subprocess.Popen(shlex.split("df /"), stdout=subprocess.PIPE).communicate()
-        m=re.search(r'(/[^\s]+)\s',str(out))
-        if m:
-            mp= m.group(1)
-            return mp 
-        else:
-            return -1   
+        self.logger = logger or get_logger(conf, log_route='osinfo')
 
     def GET(self, req):
         """Returns a 200 response with "OK" in the body."""
@@ -54,11 +42,7 @@ class BWInfoMiddleware(object):
 
         """
         body = ""
-        f = open("/tmp/bwfile","r")
-        body = self.get_mount_point(self.conf.get('devices')) + "#"
-        for line in f:
-            body = body + line
-        f.close()
+        body = "Information from OS ...."
         return Response(request=req, body=body, content_type="text/plain")
 
     def DISABLED(self, req):
@@ -68,22 +52,14 @@ class BWInfoMiddleware(object):
 
     def __call__(self, env, start_response):
         req = Request(env)
-        try:
-            if req.path == '/bwinfo/':
-                handler = self.GET
-                if self.disable_path and os.path.exists(self.disable_path):
-                    handler = self.DISABLED
-                return handler(req)(env, start_response)
-        except UnicodeError:
-            # definitely, this is not /bwinfo
-            pass
-        return self.app (env,start_response)
+        response = self.app(env,,start_response)
+        return response
 
 
 def filter_factory(global_conf, **local_conf):
     conf = global_conf.copy()
     conf.update(local_conf)
 
-    def bwinfo_filter(app):
-        return BWInfoMiddleware(app, conf)
-    return bwinfo_filter
+    def osnfo_filter(app):
+        return OSInfoMiddleware(app, conf)
+    return osinfo_filter
