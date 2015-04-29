@@ -1,27 +1,3 @@
-# BW Differentiation tests
-
-Modifications to ThreadPool to assess a BW per object.
-
-* IOStackThreadPool automatically creates a worker per data stream. 
-* Using the eventlet model, all the reads go to a different thread.
-* Using ioprio is not possible due to that problem, so we tried 
-  different alternatives to use directly read system call. However,
-  read from libc is monkey_patched and is moved to another thread
-  automatically.
-* We created an external (C) augmentedRead accepting a priority value,
-  working as expected. We still have thread switching not being able to 
-  fix it, but at least the priority value can be setup accordingly.
-* As we are now setting up, priority values we can avoid the interference 
-  controls.
-
-
-
-* We tried HTTP proxy alternatives but they do not work as expected, as the stream
-  is provided directly by the object servers, so we may need to go lower level.
-
-* We also tried middleware coding, but we are only using it to monitor and get information
-about the object server used instant BW (using some external utility)
-
 
 # Compilation of external code
  * gcc -c -fPIC iostackmodule.c -o iostackmodule.o 
@@ -32,10 +8,6 @@ about the object server used instant BW (using some external utility)
   Creates a /tmp/bwfile with disk BW information each second, the file will be used
   to provide BW statistics to the proxy so it can select an object server
 
-
-We still have the device and the "needed BW" information hard coded.
-Finally, we will need some extra testing to see if 
-the extra priority information is working as intended. 
 
 # Swift
 
