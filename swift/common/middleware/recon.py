@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import errno
-import os, stat, subprocess, shlex, re, sys
+import os
 from swift import gettext_ as _
 
 from swift import __version__ as swiftver
@@ -142,27 +142,6 @@ class ReconMiddleware(object):
                                           self.object_recon_cache)
         else:
             return None
-
-    def get_mount_point(self, path):
-        dev = os.stat(path).st_dev
-        major = os.major(dev)
-        minor = os.minor(dev)
-        out = subprocess.Popen(shlex.split("df /"), stdout=subprocess.PIPE).communicate()
-        m=re.search(r'(/[^\s]+)\s',str(out))
-        if m:
-            mp= m.group(1)
-            return mp 
-        else:
-            return -1   
-
-    def get_bwinfo(self):
-        body = ""
-        f = open("/tmp/bwfile","r")
-        body = self.get_mount_point(self.devices) + "#"
-        for line in f:
-            body = body + line
-        f.close()
-        return body
 
     def get_device_info(self):
         """get devices"""
@@ -367,8 +346,6 @@ class ReconMiddleware(object):
             content = self.get_socket_info()
         elif rcheck == "version":
             content = self.get_version()
-        elif rcheck == "bwinfo":
-            content = self.get_bwinfo()
         else:
             content = "Invalid path: %s" % req.path
             return Response(request=req, status="404 Not Found",
