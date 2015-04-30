@@ -2951,7 +2951,7 @@ class IOStackThreadPool(object):
 
     """
     def __init__(self, nthreads=2, identifier='object'):
-        self.nthreads = nthreads
+       
         self.nthreads = 0   # Threads are dynamically created by run_in_thread_shaping and destroyed in the worker 
                             # Destruction is done for the last Thread (queue based), but they can be reused.
         self._id = identifier
@@ -3068,12 +3068,7 @@ class IOStackThreadPool(object):
 
         # BW Control
 
-        
-        #augread = cdll.LoadLibrary('/usr/lib/libiostackmodule.so')
-        _libc_getpid = load_libc_function('accept', fail_if_missing=True)
-
-        originalRead = True  # Use the originalRead
-        self._last_Prio[index] = -1
+        self._last_Prio[index] = -1 # Do not change the priority if it is the same
         while True:
             item = work_queue.get()
             if item is None:
@@ -3081,55 +3076,44 @@ class IOStackThreadPool(object):
 
             ev, disk, fp, func, args, kwargs = item
 
-            if self._needed_BW[index] != -1:
-                #Calculate the attained BW
-                totaltime, totalsize = self.update_bw_stats(index)
-                priority = 0    # Highest priority 
-                # If our BW is higher
-            
-                if (self._calculated_BW[index] > (self._needed_BW[index] + 0.2)):
-                    priority = 7
-                    
-                try:
-                    """ 
-                    GetPID does not return the correct thread id, so we need to use a gettid syscall.
+           
+            #Calculate the attained BW
+            totaltime, totalsize = self.update_bw_stats(index)
+            priority = 0    # Highest priority 
+            # If our BW is higher
+        
+            if (self._needed_BW[index] == -1 or (self._calculated_BW[index] > (self._needed_BW[index] + 0.2) )):
+                priority = 7
+                
+            try:
+                """ 
+                GetPID does not return the correct thread id, so we need to use a gettid syscall.
 
-                    """
-                    
-                    if (self._last_Prio[index] != priority):
-                        p = psutil.Process(self._augread.gettid())
-                        if (priority == 0):
-                            p.set_ionice(2,0)
-                        else: p.set_ionice(3)
-                        self._last_Prio[index] = priority
-                    result = func(*args, **kwargs)
-                    
-                    result_queue.put((ev, True, result))
-                   
-                    if (fp is not None):
-                        size = args[0]/(1024.0*1024.0)
-                        mb, starttime = self._calculate_BW[index]
-                        self._calculate_BW[index] = (mb + size, starttime)
+                """
+                
+                if (self._last_Prio[index] != priority):
+                    p = psutil.Process(self._augread.gettid())
+                    if (priority == 0):
+                        p.set_ionice(2,0)
+                    else: p.set_ionice(3)
+                    self._last_Prio[index] = priority
+                result = func(*args, **kwargs)
+                
+                result_queue.put((ev, True, result))
+               
+                if (fp is not None):
+                    size = args[0]/(1024.0*1024.0)
+                    mb, starttime = self._calculate_BW[index]
+                    self._calculate_BW[index] = (mb + size, starttime)
 
-                    self._last_REQ[index] = time.time()
-                except BaseException:
-                    #logging.warning("Exception %(result)s",{'result':result})
-                    result_queue.put((ev, False, sys.exc_info()))
-                finally:
-                    work_queue.task_done()
-                    os.write(self.wpipe, u'%05d' % index)  # this byte represents which queue we are working
-            else:
-                try:
-                    #No BW differentiation
-                    result = func(*args, **kwargs)
-                    result_queue.put((ev, True, result))
-                    self._last_REQ[index] = time.time()
-                except BaseException:
-                    #logging.warning("Exception %(result)s",{'result':result})
-                    result_queue.put((ev, False, sys.exc_info()))
-                finally:
-                    work_queue.task_done()
-                    os.write(self.wpipe, u'%05d' % index)  # this byte represents which queue we are working
+                self._last_REQ[index] = time.time()
+            except BaseException:
+                #logging.warning("Exception %(result)s",{'result':result})
+                result_queue.put((ev, False, sys.exc_info()))
+            finally:
+                work_queue.task_done()
+                os.write(self.wpipe, u'%05d' % index)  # this byte represents which queue we are working
+
                 
     def _consume_results(self, queue):
         """
