@@ -50,7 +50,7 @@ from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPCreated, \
     HTTPInsufficientStorage, HTTPForbidden, HTTPException, HeaderKeyDict, \
     HTTPConflict
 from swift.obj.diskfile import DATAFILE_SYSTEM_META, DiskFileManager
-
+from swift.common.utils import json
 
 class EventletPlungerString(str):
     """
@@ -738,6 +738,23 @@ class ObjectController(BaseStorageServer):
             slow = self.slow - trans_time
             if slow > 0:
                 sleep(slow)
+
+
+        if req.path.startswith('/osinfo/'):
+            # Submit oid - bw information about the current worker that will be the only one...
+            content = len(self._diskfile_mgr.threadpools)
+            if len(self._diskfile_mgr.threadpools) > 0:
+                content = "OS Content : " 
+                for k,v in self._diskfile_mgr.threadpools.iteritems():
+                    v.checkQueues()
+                    v.removeQueues()
+                    content = content + k + " - " + str(len(v._threads)) + " * " 
+                    for k2,v2 in v._worker2disk.iteritems():
+                        content = content + str(k2) + " @ " + str(v2) + "[" + str(v._calculated_BW[int(v2)]) + "/" + str(v._needed_BW[int(v2)]) +  "]" +" | "
+
+            return Response(request=req, body=json.dumps(content)
+                           )(env, start_response)
+
 
         # To be able to zero-copy send the object, we need a few things.
         # First, we have to be responding successfully to a GET, or else we're
