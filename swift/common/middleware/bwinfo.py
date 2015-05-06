@@ -13,11 +13,50 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os, stat, subprocess, shlex, re, sys
+import os, stat, subprocess, shlex, re, sys, time, psutil
+import threading
 from swift import gettext_ as _
 from swift.common.utils import cache_from_env, get_logger, register_swift_info
 from swift.common.swob import Request, Response
 
+
+def threaded_function(event, name, BWstats):
+    _waittime = 1
+    stats = dict()
+    stats['sda'] = _getDiskStats("sda", _waittime)
+    stats['sdb'] = _getDiskStats("sdb", _waittime)
+    stats['sdc'] = _getDiskStats("sdc", _waittime)
+
+    while True:
+        if event.wait(_waittime):
+            break
+        BWdisk = dict()
+        for i in stats:
+            read, write = _getDiskStats(i, _waittime)
+            oldread, oldwrite = stats[i]
+            stats[i] = (read,write)
+            BWdisk[i] = (read-oldread, write-oldwrite)
+        BWstats[name] = BWdisk
+
+
+def _getDiskStats (disk, promtime):
+    """
+    Aggregates all the partitions of the same disk 
+
+    It should be better to put it out of the IOStackThreadPool
+
+    :param disk: "sdc"
+    :returns: read and write bytes of the disk.
+
+    """
+    stats = psutil.disk_io_counters(perdisk=True)
+    read = 0.0;
+    write = 0.0;
+    for i in stats:
+        if disk in i[:-1]:
+            read += stats[i].read_bytes/(1024.0*1024.0)
+            write += stats[i].write_bytes/(1024.0*1024.0)
+    return (read/promtime,write/promtime)
 
 class BWInfoMiddleware(object):
     """
@@ -29,6 +68,20 @@ class BWInfoMiddleware(object):
         self.conf = conf
         self.disable_path = conf.get('disable_path', '')
         self.logger = logger or get_logger(conf, log_route='bwlimit')
+        self.event = threading.Event()
+        self.BWstats = dict()
+        self.th = threading.Thread(target = threaded_function, name = conf.get('__file__', ''), 
+                                    args = (self.event, conf.get('__file__', ''), self.BWstats,))
+        self.th.start()
+        time.sleep(0.1)
+
+    def __del__(self):
+        try:
+            self.event.set()
+            self.th.join()
+        except RuntimeError as err:
+            pass
+
 
     def get_mount_point(self, path):
         dev = os.stat(path).st_dev
@@ -53,13 +106,19 @@ class BWInfoMiddleware(object):
             2. piggyback inside the response in an additional header
 
         """
-        body = ""
-        f = open("/tmp/bwfile","r")
-        body = self.get_mount_point(self.conf.get('devices')) + "#"
-        for line in f:
-            body = body + line
-        f.close()
-        return Response(request=req, body=body, content_type="text/plain")
+
+        osdev = self.get_mount_point(self.conf.get('devices'))
+        BWList = self.BWstats[self.conf.get('__file__', '')]
+        self.logger.warning(_("Marc %s"), BWList)
+        timing = ""
+        try:
+            for element in BWList:
+                read,write = BWList[element]
+                if osdev[:-1] == "/dev/" + element:
+                    timing = str(float(read)+float(write))
+        except Exception as err:
+            pass
+        return Response(request=req, body=timing, content_type="text/plain")
 
     def DISABLED(self, req):
         """Returns a 503 response with "DISABLED BY FILE" in the body."""

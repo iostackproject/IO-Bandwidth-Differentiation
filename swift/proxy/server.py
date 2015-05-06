@@ -393,29 +393,21 @@ class Application(object):
         shuffle(nodes)
         if self.sorting_method == 'bw':
 
-            timing=dict()
             for node in nodes:
                 getBW = "{ip}:{port}/bwinfo".format(**node)
                 conn = http_connect(node['ip'], node['port'],"bwinfo", "",
                                 'GET', "", headers="")
                 resp = conn.getresponse()
+
                 if is_success(resp.status):
-                    BWList = resp.read()  # Returns a "<device>  MBread MBWrite <device>..."
-
-                    splitlist = BWList.split('#')
-                    nodedev = splitlist.pop(0)
-                    try:
-                        for element in splitlist:
-                            dev,read,write = element.split()
-
-                            if nodedev[:-1] == "/dev/" + dev:
-                                timing = float(read)+float(write) 
-                                node['timing']=timing
-                    except Exception as e:
-                        pass
+                    BWtiming = resp.read()  # Returns (read MB/s + write MB/s)"
+                    node['timing'] = BWtiming
                 #       
                     def key_func(node):
-                        return node['timing']
+                        if 'timing' in node:
+                            return node['timing']
+                        else:
+                            return 0
 
 
                     nodes.sort(key=key_func)

@@ -32,9 +32,9 @@ def _getDiskStats (disk):
     read = 0;
     write = 0;
     for i in stats:
-        if disk in i:
-            read = stats[i].read_bytes/(1024.0*1024.0)
-            write = stats[i].write_bytes/(1024.0*1024.0)
+        if disk in i[:-1]:
+            read += stats[i].read_bytes/(1024.0*1024.0)
+            write += stats[i].write_bytes/(1024.0*1024.0)
     return (read,write)
 
 def _getCPUIOWait ():
