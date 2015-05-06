@@ -23,9 +23,9 @@ from swift.common.swob import Request, Response
 def threaded_function(event, name, BWstats):
     _waittime = 1
     stats = dict()
-    stats['sda'] = _getDiskStats("sda", _waittime)
-    stats['sdb'] = _getDiskStats("sdb", _waittime)
-    stats['sdc'] = _getDiskStats("sdc", _waittime)
+    devices = psutil.disk_partitions(all=False)
+    for d in devices:
+        stats[d.device[:-1]] = _getDiskStats(d.device[:-1], _waittime)
 
     while True:
         if event.wait(_waittime):
@@ -37,7 +37,7 @@ def threaded_function(event, name, BWstats):
             stats[i] = (read,write)
             BWdisk[i] = (read-oldread, write-oldwrite)
         BWstats[name] = BWdisk
-
+        
 
 def _getDiskStats (disk, promtime):
     """
@@ -52,6 +52,8 @@ def _getDiskStats (disk, promtime):
     stats = psutil.disk_io_counters(perdisk=True)
     read = 0.0;
     write = 0.0;
+    if disk.startswith('/dev/'):
+        disk = disk[5:]
     for i in stats:
         if disk in i[:-1]:
             read += stats[i].read_bytes/(1024.0*1024.0)
@@ -109,12 +111,11 @@ class BWInfoMiddleware(object):
 
         osdev = self.get_mount_point(self.conf.get('devices'))
         BWList = self.BWstats[self.conf.get('__file__', '')]
-        self.logger.warning(_("Marc %s"), BWList)
         timing = ""
         try:
             for element in BWList:
                 read,write = BWList[element]
-                if osdev[:-1] == "/dev/" + element:
+                if osdev[:-1] == element:
                     timing = str(float(read)+float(write))
         except Exception as err:
             pass
