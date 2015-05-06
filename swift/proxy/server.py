@@ -397,8 +397,7 @@ class Application(object):
                 getBW = "{ip}:{port}/bwinfo".format(**node)
                 conn = http_connect(node['ip'], node['port'],"bwinfo", "",
                                 'GET', "", headers="")
-                resp = conn.getresponse()
-
+                resp = conn.getresponse()           
                 if is_success(resp.status):
                     BWtiming = resp.read()  # Returns (read MB/s + write MB/s)"
                     node['timing'] = BWtiming
@@ -408,7 +407,6 @@ class Application(object):
                             return node['timing']
                         else:
                             return 0
-
 
                     nodes.sort(key=key_func)
 
