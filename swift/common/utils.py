@@ -2966,6 +2966,9 @@ class IOStackThreadPool(object):
         self._augread = load_iostackmodule()
 
         self._needed_BW = []
+
+        self._objectnames = []
+        self._accounts = []
         self._last_REQ = []
         self._last_Prio = []
 
@@ -3035,6 +3038,8 @@ class IOStackThreadPool(object):
                 self._calculated_BW.pop()
                 self._calculate_BW.pop()
                 self._needed_BW.pop()
+                self._accounts.pop()
+                self._objectnames.pop()
               
 
                 thr = self._threads.pop()
@@ -3242,6 +3247,8 @@ class IOStackThreadPool(object):
                 self._last_Prio[index] = -1
                 self._calculate_BW[index] = (0,time.time())   # KB, start
                 self._needed_BW[index] = limit
+                self._objectnames[index] = data_file
+                self._accounts[index] = account
                 # TODO: If we sent from the client, probably we need it per AUTH, then each AUTH has its queue and not each DATA_FILE... However how this maps to multiple obkect stores, 
                 # Should we limit among them....We need that an external entity to tune each individual participating object store correctly and dynamically
                 logging.warning("I am running to this queue  %(queue)s for %(disk)s / %(account)s at %(bw)s rate",{'queue':queue_num, 'disk':data_file , 'account':account, 'bw': self._needed_BW[index]})
@@ -3255,6 +3262,8 @@ class IOStackThreadPool(object):
                 self._last_REQ.append(time.time()) 
                 self._last_Prio.append(-1)
                 self._needed_BW.append(limit)
+                self._objectnames.append(data_file)
+                self._accounts.append(account)
 
                 
                 rq = Queue()

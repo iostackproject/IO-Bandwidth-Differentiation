@@ -742,18 +742,22 @@ class ObjectController(BaseStorageServer):
 
         if req.path.startswith('/osinfo/'):
             # Submit oid - bw information about the current worker that will be the only one...
-            content = len(self._diskfile_mgr.threadpools)
+            content = dict()
             if len(self._diskfile_mgr.threadpools) > 0:
-                content = "OS Content : " 
                 for k,v in self._diskfile_mgr.threadpools.iteritems():
                     v.checkQueues()
                     v.removeQueues()
-                    content = content + k + " - " + str(len(v._threads)) + " * " 
+                    thr = dict()
                     for k2,v2 in v._worker2disk.iteritems():
-                        content = content + str(k2) + " @ " + str(v2) + "[" + str(v._calculated_BW[int(v2)]) + "/" + str(v._needed_BW[int(v2)]) +  "]" +" | "
-
-            return Response(request=req, body=json.dumps(content)
-                           )(env, start_response)
+                        item = dict()
+                        item['identifier'] = v._id
+                        item['account'] = v._accounts[int(v2)]
+                        item['object'] = v._objectnames[int(v2)]
+                        item['calculated_BW'] = v._calculated_BW[int(v2)]
+                        item['needed_BW'] = v._needed_BW[int(v2)]
+                        thr[str(v2)] = item
+                    content[k] = thr
+            return Response(request=req, body=json.dumps(content), content_type="application/json")(env, start_response)
 
 
         # To be able to zero-copy send the object, we need a few things.

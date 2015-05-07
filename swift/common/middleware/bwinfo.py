@@ -25,21 +25,21 @@ def threaded_function(event, name, BWstats):
     stats = dict()
     devices = psutil.disk_partitions(all=False)
     for d in devices:
-        stats[d.device[:-1]] = _getDiskStats(d.device[:-1], _waittime)
+        stats[d.device[:-1]] = _getDiskStats(d.device[:-1])
 
     while True:
         if event.wait(_waittime):
             break
         BWdisk = dict()
         for i in stats:
-            read, write = _getDiskStats(i, _waittime)
+            read, write = _getDiskStats(i)
             oldread, oldwrite = stats[i]
             stats[i] = (read,write)
-            BWdisk[i] = (read-oldread, write-oldwrite)
+            BWdisk[i] = ((read-oldread)/_waittime, (write-oldwrite)/_waittime)
         BWstats[name] = BWdisk
         
 
-def _getDiskStats (disk, promtime):
+def _getDiskStats (disk):
     """
     Aggregates all the partitions of the same disk 
 
@@ -58,7 +58,7 @@ def _getDiskStats (disk, promtime):
         if disk in i[:-1]:
             read += stats[i].read_bytes/(1024.0*1024.0)
             write += stats[i].write_bytes/(1024.0*1024.0)
-    return (read/promtime,write/promtime)
+    return (read,write)
 
 class BWInfoMiddleware(object):
     """
