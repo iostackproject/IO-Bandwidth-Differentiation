@@ -2967,8 +2967,7 @@ class IOStackThreadPool(object):
 
         self._needed_BW = []
 
-        self._objectnames = []
-        self._accounts = []
+        self._diskreaders = []
         self._last_REQ = []
         self._last_Prio = []
 
@@ -3038,8 +3037,7 @@ class IOStackThreadPool(object):
                 self._calculated_BW.pop()
                 self._calculate_BW.pop()
                 self._needed_BW.pop()
-                self._accounts.pop()
-                self._objectnames.pop()
+                self._diskreaders.pop()
               
 
                 thr = self._threads.pop()
@@ -3184,7 +3182,7 @@ class IOStackThreadPool(object):
         result = ev.wait()
         return result
 
-    def run_in_thread_shaping(self, account, data_file, limit, fp, func, *args, **kwargs):
+    def run_in_thread_shaping(self, diskfilereader, *args, **kwargs):
         """
         Runs func(*args, **kwargs) in a thread. Blocks the current greenlet
         until results are available.
@@ -3209,6 +3207,13 @@ class IOStackThreadPool(object):
         :returns: result of calling func
         :raises: whatever func raises
         """
+        
+        account = diskfilereader._account
+        data_file = diskfilereader._data_file
+        limit = diskfilereader._limit
+        fp = diskfilereader._fp
+        func = diskfilereader._fp.read
+
         if not self._alive:
             raise swift.common.exceptions.ThreadPoolDead()
 
@@ -3216,7 +3221,7 @@ class IOStackThreadPool(object):
         #    result = func(*args, **kwargs)
         #    sleep()
         #    return result
-
+        
         ev = event.Event()
         identifier = (account if self._id == 'account' else data_file)
         #TODO : Should be externaly, or create - destroy each work queue per stream and maintain some dict. 
@@ -3224,6 +3229,8 @@ class IOStackThreadPool(object):
         if identifier in self._worker2disk:
             # Extract Queue number
             queue_num = self._worker2disk[identifier]
+            if not diskfilereader in self._diskreaders[queue_num]:
+                self._diskreaders[queue_num].append(diskfilereader)
             self._needed_BW[queue_num] = limit  # Change dynamically the ratio.
         else:
             # Update Threads (Setup to inactive)
@@ -3241,14 +3248,13 @@ class IOStackThreadPool(object):
                 self._indexworker[index] = index
                 self._worker2disk[identifier] = index
                 queue_num = index
-             
+
                 self._calculated_BW[index] = 0
                 self._last_REQ[index] = time.time()
                 self._last_Prio[index] = -1
                 self._calculate_BW[index] = (0,time.time())   # KB, start
                 self._needed_BW[index] = limit
-                self._objectnames[index] = data_file
-                self._accounts[index] = account
+                self._diskreaders[index] = [diskfilereader]
                 # TODO: If we sent from the client, probably we need it per AUTH, then each AUTH has its queue and not each DATA_FILE... However how this maps to multiple obkect stores, 
                 # Should we limit among them....We need that an external entity to tune each individual participating object store correctly and dynamically
                 logging.warning("I am running to this queue  %(queue)s for %(disk)s / %(account)s at %(bw)s rate",{'queue':queue_num, 'disk':data_file , 'account':account, 'bw': self._needed_BW[index]})
@@ -3262,8 +3268,7 @@ class IOStackThreadPool(object):
                 self._last_REQ.append(time.time()) 
                 self._last_Prio.append(-1)
                 self._needed_BW.append(limit)
-                self._objectnames.append(data_file)
-                self._accounts.append(account)
+                self._diskreaders.append([diskfilereader])
 
                 
                 rq = Queue()

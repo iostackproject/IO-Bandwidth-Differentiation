@@ -52,6 +52,7 @@ from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPCreated, \
 from swift.obj.diskfile import DATAFILE_SYSTEM_META, DiskFileManager
 from swift.common.utils import json
 
+
 class EventletPlungerString(str):
     """
     Eventlet won't send headers until it's accumulated at least
@@ -698,12 +699,58 @@ class ObjectController(BaseStorageServer):
     def REPLICATION(self, request):
         return Response(app_iter=ssync_receiver.Receiver(self, request)())
 
+      
+
+
     def __call__(self, env, start_response):
         """WSGI Application entry point for the Swift Object Server."""
         start_time = time.time()
         req = Request(env)
         self.logger.txn_id = req.headers.get('x-trans-id', None)
 
+        if req.path.startswith('/osinfo/'):
+            # Submit oid - bw information about the current worker that will be the only one...
+            content = dict()
+            if len(self._diskfile_mgr.threadpools) > 0:
+                for k,v in self._diskfile_mgr.threadpools.iteritems():
+                    v.checkQueues()
+                    v.removeQueues()
+                    thr = dict()
+                    for k2,v2 in v._worker2disk.iteritems():
+                        item = dict()
+                        item['identifier'] = v._id
+                        #item['account'] = v._diskreaders[int(v2)][0]._account
+                        #item['data_file'] = []
+                        #for obj in v._diskreaders[int(v2)]:
+                        #    item['data_file'].append(obj._data_file)
+                        item['oid'] = []
+                        for obj in v._diskreaders[int(v2)]:
+                            item['oid'].append(obj._data_name)
+                        item['calculated_BW'] = v._calculated_BW[int(v2)]
+                        item['needed_BW'] = v._needed_BW[int(v2)]
+                        thr[str(v2)] = item
+                    content[k] = thr
+            return Response(request=req, body=json.dumps(content), content_type="application/json")(env, start_response)
+        
+        if req.path.startswith('/bwmod/'):
+            r = req.path.split('/')
+            r.pop(0) #""
+            r.pop(0) #"bwmod"
+            try:
+                bw = int(r.pop())
+            except Exception:
+                return Response(request=req, status=400, body="BAD REQUEST\n", content_type="text/plain")(env, start_response)
+
+            if len(self._diskfile_mgr.threadpools) > 0:
+                for k,v in self._diskfile_mgr.threadpools.iteritems():
+                    for k2,v2 in v._worker2disk.iteritems():
+                        for obj in v._diskreaders[int(v2)]: 
+                            if obj._data_name == ("/" + "/".join(r)):  
+                                for idx, obj in enumerate(v._diskreaders[int(v2)]):
+                                        v._diskreaders[int(v2)][idx]._limit = int(bw)
+                                return Response(request=req, status=200, body="BW MODIFIED\n", content_type="text/plain")(env, start_response)
+                        return Response(request=req, status=404, body="FILE NOT FOUND\n", content_type="text/plain")(env, start_response)
+        
         if not check_utf8(req.path_info):
             res = HTTPPreconditionFailed(body='Invalid UTF8 or contains NULL')
         else:
@@ -739,26 +786,8 @@ class ObjectController(BaseStorageServer):
             if slow > 0:
                 sleep(slow)
 
-
-        if req.path.startswith('/osinfo/'):
-            # Submit oid - bw information about the current worker that will be the only one...
-            content = dict()
-            if len(self._diskfile_mgr.threadpools) > 0:
-                for k,v in self._diskfile_mgr.threadpools.iteritems():
-                    v.checkQueues()
-                    v.removeQueues()
-                    thr = dict()
-                    for k2,v2 in v._worker2disk.iteritems():
-                        item = dict()
-                        item['identifier'] = v._id
-                        item['account'] = v._accounts[int(v2)]
-                        item['object'] = v._objectnames[int(v2)]
-                        item['calculated_BW'] = v._calculated_BW[int(v2)]
-                        item['needed_BW'] = v._needed_BW[int(v2)]
-                        thr[str(v2)] = item
-                    content[k] = thr
-            return Response(request=req, body=json.dumps(content), content_type="application/json")(env, start_response)
-
+        
+      
 
         # To be able to zero-copy send the object, we need a few things.
         # First, we have to be responding successfully to a GET, or else we're

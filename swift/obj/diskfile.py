@@ -924,12 +924,13 @@ class DiskFileReader(object):
     :param keep_cache: should resulting reads be kept in the buffer cache
     """
     
-    def __init__(self, fp, account, data_file, obj_size, bwlimit, etag, threadpool,
+    def __init__(self, fp, account, data_name, data_file, obj_size, bwlimit, etag, threadpool,
                  disk_chunk_size, keep_cache_size, device_path, logger,
                  quarantine_hook, use_splice, pipe_size, keep_cache=False):
         # Parameter tracking
         self._fp = fp
         self._account = account
+        self._data_name = data_name
         self._data_file = data_file
         self._obj_size = obj_size
         self._etag = etag
@@ -972,8 +973,7 @@ class DiskFileReader(object):
                 self._iter_etag = hashlib.md5()
 
             while True:
-                chunk = self._threadpool.run_in_thread_shaping(self._account,self._data_file,  self._limit,self._fp,
-                    self._fp.read, self._disk_chunk_size)
+                chunk = self._threadpool.run_in_thread_shaping(self, self._disk_chunk_size)
                 if chunk:
                     if self._iter_etag:
                         self._iter_etag.update(chunk)
@@ -1588,8 +1588,9 @@ class DiskFile(object):
                                  Not needed by the REST layer.
         :returns: a :class:`swift.obj.diskfile.DiskFileReader` object
         """
+
         dr = DiskFileReader(
-            self._fp, self._account, self._data_file, int(self._metadata['Content-Length']),
+            self._fp, self._account, self._metadata['name'], self._data_file, int(self._metadata['Content-Length']),
             self._bwlimit, self._metadata['ETag'], self._threadpool, self._disk_chunk_size,
             self._mgr.keep_cache_size, self._device_path, self._logger,
             use_splice=self._use_splice, quarantine_hook=_quarantine_hook,
