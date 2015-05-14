@@ -749,7 +749,7 @@ class ObjectController(BaseStorageServer):
                                 for idx, obj in enumerate(v._diskreaders[int(v2)]):
                                         v._diskreaders[int(v2)][idx]._limit = int(bw)
                                 return Response(request=req, status=200, body="BW MODIFIED\n", content_type="text/plain")(env, start_response)
-                        return Response(request=req, status=404, body="FILE NOT FOUND\n", content_type="text/plain")(env, start_response)
+                    return Response(request=req, status=404, body="FILE NOT FOUND\n", content_type="text/plain")(env, start_response)
         
         if not check_utf8(req.path_info):
             res = HTTPPreconditionFailed(body='Invalid UTF8 or contains NULL')
