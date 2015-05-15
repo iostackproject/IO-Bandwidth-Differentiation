@@ -36,10 +36,12 @@ from swift.proxy.controllers import AccountController, ObjectController, \
     ContainerController, InfoController
 from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
     HTTPMethodNotAllowed, HTTPNotFound, HTTPPreconditionFailed, \
-    HTTPServerError, HTTPException, Request
+    HTTPServerError, HTTPException, Request, Response
 from swift.common.direct_client import http_connect
 from swift.common.http import HTTP_NO_CONTENT, HTTP_INSUFFICIENT_STORAGE, \
     is_success, is_server_error
+from swift.common.utils import json
+
 
 # List of entry points for mandatory middlewares.
 #
@@ -264,6 +266,23 @@ class Application(object):
             return AccountController, d
         return None, d
 
+    def get_osinfo_data(self):
+        """
+        Gets the osinfo data from all the available OS.
+
+        returns: json with the osinfo data
+        """
+        nodes = self.get_object_ring(0).devs
+        osinfo_json = dict()
+        for node in nodes:
+            conn = http_connect(node['ip'], node['port'],"osinfo", "",
+                           'GET', "", headers="")
+            resp = conn.getresponse()
+            if is_success(resp.status):
+                nodeid = node['ip'] + ':' + str(node['port'])
+                osinfo_json[nodeid] = json.loads(resp.read())
+        return osinfo_json
+
     def __call__(self, env, start_response):
         """
         WSGI entry point.
@@ -317,8 +336,11 @@ class Application(object):
                     request=req, body='Invalid UTF8 or contains NULL')
 
             try:
+                if 'osinfo' in req.path:
+                    return Response(request=req, status=200, body=json.dumps(self.get_osinfo_data()), content_type="application/json")
                 controller, path_parts = self.get_controller(req.path)
                 p = req.path_info
+
                 if isinstance(p, unicode):
                     p = p.encode('utf-8')
             except ValueError:
