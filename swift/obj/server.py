@@ -43,7 +43,7 @@ from swift.common.http import is_success
 from swift.common.base_storage_server import BaseStorageServer
 from swift.common.request_helpers import get_bwlimit, get_name_and_placement, \
     is_user_meta, is_sys_or_user_meta
-from swift.common.swob import HTTPAccepted, HTTPBadRequest, HTTPCreated, \
+from swift.common.swob import HTTPAccepted, HTTPOk, HTTPBadRequest, HTTPCreated, \
     HTTPInternalServerError, HTTPNoContent, HTTPNotFound, \
     HTTPPreconditionFailed, HTTPRequestTimeout, HTTPUnprocessableEntity, \
     HTTPClientDisconnect, HTTPMethodNotAllowed, Request, Response, \
@@ -708,7 +708,7 @@ class ObjectController(BaseStorageServer):
         req = Request(env)
         self.logger.txn_id = req.headers.get('x-trans-id', None)
 
-        if req.path.startswith('/osinfo/'):
+        if 'osinfo' in req.path:
             # Submit oid - bw information about the current worker that will be the only one...
             content = dict()
             if len(self._diskfile_mgr.threadpools) > 0:
@@ -719,10 +719,6 @@ class ObjectController(BaseStorageServer):
                     for k2,v2 in v._worker2disk.iteritems():
                         item = dict()
                         item['identifier'] = v._id
-                        #item['account'] = v._diskreaders[int(v2)][0]._account
-                        #item['data_file'] = []
-                        #for obj in v._diskreaders[int(v2)]:
-                        #    item['data_file'].append(obj._data_file)
                         item['oid'] = []
                         for obj in v._diskreaders[int(v2)]:
                             item['oid'].append(obj._data_name)
@@ -730,16 +726,15 @@ class ObjectController(BaseStorageServer):
                         item['needed_BW'] = v._needed_BW[int(v2)]
                         thr[str(v2)] = item
                     content[k] = thr
-            return Response(request=req, body=json.dumps(content), content_type="application/json")(env, start_response)
+            return HTTPOk(request=req, body=json.dumps(content), content_type="application/json")(env, start_response)
         
-        if req.path.startswith('/bwmod/'):
+        if 'bwmod' in req.path:
             try:
-                r = req.path.split('/')
-                r.pop(0) #""
-                r.pop(0) #"bwmod"
+                r = filter(bool, req.path.split('/'))
+                r = r[2:] # rm 'v1' 'bwmod'
                 bw = int(r.pop())
             except Exception:
-                return Response(request=req, status=400, body="BAD REQUEST\n", content_type="text/plain")(env, start_response)
+                return HTTPBadRequest(request=req)
 
             if len(self._diskfile_mgr.threadpools) > 0:
                 for k,v in self._diskfile_mgr.threadpools.iteritems():
@@ -748,8 +743,8 @@ class ObjectController(BaseStorageServer):
                             if obj._data_name == ("/" + "/".join(r)):  
                                 for idx, obj in enumerate(v._diskreaders[int(v2)]):
                                         v._diskreaders[int(v2)][idx]._limit = int(bw)
-                                return Response(request=req, status=200, body="BW MODIFIED\n", content_type="text/plain")(env, start_response)
-            return Response(request=req, status=404, body="FILE NOT FOUND\n", content_type="text/plain")(env, start_response)
+                                return HTTPOk(request=req)(env, start_response)
+            return HTTPNotFound(request=req)(env, start_response)
 
         
         if not check_utf8(req.path_info):

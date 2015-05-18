@@ -36,7 +36,7 @@ from swift.proxy.controllers import AccountController, ObjectController, \
     ContainerController, InfoController
 from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
     HTTPMethodNotAllowed, HTTPNotFound, HTTPPreconditionFailed, \
-    HTTPServerError, HTTPException, Request, Response
+    HTTPServerError, HTTPException, HTTPOk, Request, Response
 from swift.common.direct_client import http_connect
 from swift.common.http import HTTP_NO_CONTENT, HTTP_INSUFFICIENT_STORAGE, \
     is_success, is_server_error
@@ -283,6 +283,26 @@ class Application(object):
                 osinfo_json[nodeid] = json.loads(resp.read())
         return osinfo_json
 
+    def bwmod(self, req, osinfo_data):
+        try:
+            r = filter(bool, req.path.split('/'))
+            r = r[2:] # rm 'v1' 'bwmod'
+            bw = int(r.pop())
+        except Exception:
+            return HTTPBadRequest(request=req)
+        res = HTTPNotFound(request=req)
+        for os in osinfo_data:
+            for dev in osinfo_data[os]:
+                for index in osinfo_data[os][dev]:
+                    for oid in osinfo_data[os][dev][index]['oid']:
+                        if oid == "/" + "/".join(r):
+                            node = os.split(':')
+                            conn = http_connect(node[0], node[1], req.path[1:], "",
+                                            'GET', "", headers="")
+                            res = HTTPOk(request=req, body=conn.getresponse().read())
+        return res
+
+
     def __call__(self, env, start_response):
         """
         WSGI entry point.
@@ -337,7 +357,12 @@ class Application(object):
 
             try:
                 if 'osinfo' in req.path:
-                    return Response(request=req, status=200, body=json.dumps(self.get_osinfo_data()), content_type="application/json")
+                    return HTTPOk(request=req, body=json.dumps(self.get_osinfo_data()), content_type="application/json")
+
+                if 'bwmod' in req.path:
+                    osinfo_data = self.get_osinfo_data()
+                    return self.bwmod(req, osinfo_data)
+
                 controller, path_parts = self.get_controller(req.path)
                 p = req.path_info
 
