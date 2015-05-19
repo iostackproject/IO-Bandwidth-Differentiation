@@ -731,7 +731,7 @@ class ObjectController(BaseStorageServer):
         if 'bwmod' in req.path:
             try:
                 r = filter(bool, req.path.split('/'))
-                r = r[2:] # rm 'v1' 'bwmod'
+                r = r[1:] # rm 'bwmod'
                 bw = int(r.pop())
             except Exception:
                 return HTTPBadRequest(request=req)
