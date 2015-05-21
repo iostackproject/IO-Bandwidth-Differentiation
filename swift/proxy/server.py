@@ -272,7 +272,7 @@ class Application(object):
 
         returns: json with the osinfo data
         """
-        nodes = self.get_object_ring(0).devs
+        nodes = POLICIES.default.object_ring.devs
         osinfo_json = dict()
         for node in nodes:
             conn = http_connect(node['ip'], node['port'],"osinfo", "",
