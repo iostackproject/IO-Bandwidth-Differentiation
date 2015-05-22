@@ -53,6 +53,7 @@ from swift.common.swob import HTTPAccepted, HTTPOk, HTTPBadRequest, HTTPCreated,
     HTTPConflict, HTTPServerError
 from swift.obj.diskfile import DATAFILE_SYSTEM_META, DiskFileRouter
 from swift.common.utils import json
+from swift.common.storage_policy import POLICIES
 
 def iter_mime_headers_and_bodies(wsgi_input, mime_boundary, read_chunk_size):
     mime_documents_iter = iter_multipart_mime_documents(
@@ -891,23 +892,27 @@ class ObjectController(BaseStorageServer):
         self.logger.txn_id = req.headers.get('x-trans-id', None)
 
         if 'osinfo' in req.path:
+
             # Submit oid - bw information about the current worker that will be the only one...
             content = dict()
-            if len(self._diskfile_mgr.threadpools) > 0:
-                for k,v in self._diskfile_mgr.threadpools.iteritems():
-                    v.checkQueues()
-                    v.removeQueues()
-                    thr = dict()
-                    for k2,v2 in v._worker2disk.iteritems():
-                        item = dict()
-                        item['identifier'] = v._id
-                        item['oid'] = []
-                        for obj in v._diskreaders[int(v2)]:
-                            item['oid'].append(obj._data_name)
-                        item['calculated_BW'] = v._calculated_BW[int(v2)]
-                        item['needed_BW'] = v._needed_BW[int(v2)]
-                        thr[str(v2)] = item
-                    content[k] = thr
+            for policy in POLICIES:
+                if len(self._diskfile_router[policy].threadpools) > 0:
+                    self.logger.warning(_("Marc %s"), policy)
+                    for k,v in self._diskfile_router[policy].threadpools.iteritems():
+                        v.checkQueues()
+                        v.removeQueues()
+                        thr = dict()
+                        for k2,v2 in v._worker2disk.iteritems():
+                            item = dict()
+                            item['identifier'] = v._id
+                            item['oid'] = []
+                            for obj in v._diskreaders[int(v2)]:
+                                item['oid'].append(obj._data_name)
+                            item['calculated_BW'] = v._calculated_BW[int(v2)]
+                            item['needed_BW'] = v._needed_BW[int(v2)]
+                            thr[str(v2)] = item
+                        content[k] = thr
+
             return HTTPOk(request=req, body=json.dumps(content), content_type="application/json")(env, start_response)
         
         if 'bwmod' in req.path:
@@ -918,8 +923,8 @@ class ObjectController(BaseStorageServer):
             except Exception:
                 return HTTPBadRequest(request=req)
 
-            if len(self._diskfile_mgr.threadpools) > 0:
-                for k,v in self._diskfile_mgr.threadpools.iteritems():
+            if len(self._diskfile_router[policy].threadpools) > 0:
+                for k,v in self._diskfile_router[policy].threadpools.iteritems():
                     for k2,v2 in v._worker2disk.iteritems():
                         for obj in v._diskreaders[int(v2)]: 
                             if obj._data_name == ("/" + "/".join(r)):  
