@@ -71,13 +71,14 @@ if this is a middleware subrequest or not. A log processor calculating
 bandwidth usage will want to only sum up logs with no swift.source.
 """
 
+import sys
 import time
 from urllib import quote, unquote
 
 from swift.common.swob import Request
 from swift.common.utils import (get_logger, get_remote_client,
                                 get_valid_utf8_str, config_true_value,
-                                InputProxy, list_from_csv)
+                                InputProxy, list_from_csv, get_policy_index)
 
 QUOTE_SAFE = '/:'
 
@@ -135,7 +136,7 @@ class ProxyLoggingMiddleware(object):
         return value
 
     def log_request(self, req, status_int, bytes_received, bytes_sent,
-                    start_time, end_time):
+                    start_time, end_time, resp_headers=None):
         """
         Log a request.
 
@@ -145,7 +146,9 @@ class ProxyLoggingMiddleware(object):
         :param bytes_sent: bytes yielded to the WSGI server
         :param start_time: timestamp request started
         :param end_time: timestamp request completed
+        :param resp_headers: dict of the response headers
         """
+        resp_headers = resp_headers or {}
         req_path = get_valid_utf8_str(req.path)
         the_request = quote(unquote(req_path), QUOTE_SAFE)
         if req.query_string:
@@ -166,6 +169,7 @@ class ProxyLoggingMiddleware(object):
         duration_time_str = "%.4f" % (end_time - start_time)
         start_time_str = "%.9f" % start_time
         end_time_str = "%.9f" % end_time
+        policy_index = get_policy_index(req.headers, resp_headers)
         self.access_logger.info(' '.join(
             quote(str(x) if x else '-', QUOTE_SAFE)
             for x in (
@@ -188,7 +192,8 @@ class ProxyLoggingMiddleware(object):
                 req.environ.get('swift.source'),
                 ','.join(req.environ.get('swift.log_info') or ''),
                 start_time_str,
-                end_time_str
+                end_time_str,
+                policy_index
             )))
         # Log timing and bytes-transferred data to StatsD
         metric_name = self.statsd_metric_name(req, status_int, method)
@@ -257,6 +262,7 @@ class ProxyLoggingMiddleware(object):
                 elif isinstance(iterable, list):
                     start_response_args[0][1].append(
                         ('Content-Length', str(sum(len(i) for i in iterable))))
+            resp_headers = dict(start_response_args[0][1])
             start_response(*start_response_args[0])
             req = Request(env)
 
@@ -283,17 +289,21 @@ class ProxyLoggingMiddleware(object):
                 status_int = status_int_for_logging(client_disconnect)
                 self.log_request(
                     req, status_int, input_proxy.bytes_received, bytes_sent,
-                    start_time, time.time())
+                    start_time, time.time(), resp_headers=resp_headers)
+                close_method = getattr(iterable, 'close', None)
+                if callable(close_method):
+                    close_method()
 
         try:
             iterable = self.app(env, my_start_response)
         except Exception:
+            exc_type, exc_value, exc_traceback = sys.exc_info()
             req = Request(env)
             status_int = status_int_for_logging(start_status=500)
             self.log_request(
                 req, status_int, input_proxy.bytes_received, 0, start_time,
                 time.time())
-            raise
+            raise exc_type, exc_value, exc_traceback
         else:
             return iter_response(iterable)
 

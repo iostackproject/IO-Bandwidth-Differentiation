@@ -22,7 +22,7 @@ from eventlet import Timeout
 from swift.container.backend import ContainerBroker, DATADIR
 from swift.container.reconciler import (
     MISPLACED_OBJECTS_ACCOUNT, incorrect_policy_index,
-    get_reconciler_container_name, get_row_to_q_entry_translater)
+    get_reconciler_container_name, get_row_to_q_entry_translator)
 from swift.common import db_replicator
 from swift.common.storage_policy import POLICIES
 from swift.common.exceptions import DeviceUnavailable
@@ -59,7 +59,8 @@ class ContainerReplicator(db_replicator.Replicator):
                                 'storage_policy_index'))
         return sync_args
 
-    def _handle_sync_response(self, node, response, info, broker, http):
+    def _handle_sync_response(self, node, response, info, broker, http,
+                              different_region):
         parent = super(ContainerReplicator, self)
         if is_success(response.status):
             remote_info = json.loads(response.data)
@@ -74,7 +75,7 @@ class ContainerReplicator(db_replicator.Replicator):
                 broker.merge_timestamps(*(remote_info[key] for key in
                                           sync_timestamps))
         rv = parent._handle_sync_response(
-            node, response, info, broker, http)
+            node, response, info, broker, http, different_region)
         return rv
 
     def find_local_handoff_for_part(self, part):
@@ -166,14 +167,14 @@ class ContainerReplicator(db_replicator.Replicator):
         misplaced = broker.get_misplaced_since(point, self.per_diff)
         if not misplaced:
             return max_sync
-        translater = get_row_to_q_entry_translater(broker)
+        translator = get_row_to_q_entry_translator(broker)
         errors = False
         low_sync = point
         while misplaced:
             batches = defaultdict(list)
             for item in misplaced:
                 container = get_reconciler_container_name(item['created_at'])
-                batches[container].append(translater(item))
+                batches[container].append(translator(item))
             for container, item_list in batches.items():
                 success = self.feed_reconciler(container, item_list)
                 if not success:

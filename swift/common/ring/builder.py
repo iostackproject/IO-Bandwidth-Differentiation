@@ -17,9 +17,11 @@ import bisect
 import copy
 import errno
 import itertools
+import logging
 import math
 import random
 import cPickle as pickle
+from copy import deepcopy
 
 from array import array
 from collections import defaultdict
@@ -27,9 +29,20 @@ from time import time
 
 from swift.common import exceptions
 from swift.common.ring import RingData
-from swift.common.ring.utils import tiers_for_dev, build_tier_tree
+from swift.common.ring.utils import tiers_for_dev, build_tier_tree, \
+    validate_and_normalize_address
 
 MAX_BALANCE = 999.99
+
+
+try:
+    # python 2.7+
+    from logging import NullHandler
+except ImportError:
+    # python 2.6
+    class NullHandler(logging.Handler):
+        def emit(self, *a, **kw):
+            pass
 
 
 class RingBuilder(object):
@@ -95,6 +108,11 @@ class RingBuilder(object):
         self._remove_devs = []
         self._ring = None
 
+        self.logger = logging.getLogger("swift.ring.builder")
+        if not self.logger.handlers:
+            # silence "no handler for X" error messages
+            self.logger.addHandler(NullHandler())
+
     def weight_of_one_part(self):
         """
         Returns the weight of each partition as calculated from the
@@ -107,6 +125,12 @@ class RingBuilder(object):
             raise exceptions.EmptyRingError('There are no devices in this '
                                             'ring, or all devices have been '
                                             'deleted')
+
+    @classmethod
+    def from_dict(cls, builder_data):
+        b = cls(1, 1, 1)  # Dummy values
+        b.copy_from(builder_data)
+        return b
 
     def copy_from(self, builder):
         """
@@ -155,6 +179,9 @@ class RingBuilder(object):
         # which case we default it to 1.
         for dev in self._iter_devs():
             dev.setdefault("region", 1)
+
+    def __deepcopy__(self, memo):
+        return type(self).from_dict(deepcopy(self.to_dict(), memo))
 
     def to_dict(self):
         """
@@ -354,6 +381,7 @@ class RingBuilder(object):
 
         self._ring = None
         if self._last_part_moves_epoch is None:
+            self.logger.debug("New builder; performing initial balance")
             self._initial_balance()
             self.devs_changed = False
             self._build_dispersion_graph()
@@ -362,16 +390,23 @@ class RingBuilder(object):
         self._update_last_part_moves()
         last_balance = 0
         new_parts, removed_part_count = self._adjust_replica2part2dev_size()
+        self.logger.debug(
+            "%d new parts and %d removed parts from replica-count change",
+            len(new_parts), removed_part_count)
         changed_parts += removed_part_count
         self._set_parts_wanted()
         self._reassign_parts(new_parts)
         changed_parts += len(new_parts)
         while True:
             reassign_parts = self._gather_reassign_parts()
-            self._reassign_parts(reassign_parts)
             changed_parts += len(reassign_parts)
+            self.logger.debug("Gathered %d parts", changed_parts)
+            self._reassign_parts(reassign_parts)
+            self.logger.debug("Assigned %d parts", changed_parts)
             while self._remove_devs:
-                self.devs[self._remove_devs.pop()['id']] = None
+                remove_dev_id = self._remove_devs.pop()['id']
+                self.logger.debug("Removing dev %d", remove_dev_id)
+                self.devs[remove_dev_id] = None
             balance = self.get_balance()
             if balance < 1 or abs(last_balance - balance) < 1 or \
                     changed_parts == self.parts:
@@ -785,6 +820,9 @@ class RingBuilder(object):
                     if dev_id in dev_ids:
                         self._last_part_moves[part] = 0
                         removed_dev_parts[part].append(replica)
+                        self.logger.debug(
+                            "Gathered %d/%d from dev %d [dev removed]",
+                            part, replica, dev_id)
 
         # Now we gather partitions that are "at risk" because they aren't
         # currently sufficient spread out across the cluster.
@@ -850,16 +888,17 @@ class RingBuilder(object):
 
                     # Only allow a part to be gathered if there are wanted
                     # parts on other tiers.
-                    if (rep_at_tier > max_allowed_replicas[tier] and
-                            self._last_part_moves[part] >=
-                            self.min_part_hours and
-                            available_parts_for_tier > 0):
+                    if (self._last_part_moves[part] >= self.min_part_hours
+                            and available_parts_for_tier > 0):
                         self._last_part_moves[part] = 0
                         spread_out_parts[part].append(replica)
                         dev['parts_wanted'] += 1
                         dev['parts'] -= 1
                         removed_replica = True
                         moved_parts += 1
+                        self.logger.debug(
+                            "Gathered %d/%d from dev %d [dispersion]",
+                            part, replica, dev['id'])
                         break
                 if removed_replica:
                     for tier in tfd[dev['id']]:
@@ -895,6 +934,9 @@ class RingBuilder(object):
                     dev['parts_wanted'] += 1
                     dev['parts'] -= 1
                     reassign_parts[part].append(replica)
+                    self.logger.debug(
+                        "Gathered %d/%d from dev %d [weight]",
+                        part, replica, dev['id'])
 
         reassign_parts.update(spread_out_parts)
         reassign_parts.update(removed_dev_parts)
@@ -1122,6 +1164,8 @@ class RingBuilder(object):
                         new_index, new_last_sort_key)
 
                 self._replica2part2dev[replica][part] = dev['id']
+                self.logger.debug(
+                    "Placed %d/%d onto dev %d", part, replica, dev['id'])
 
         # Just to save memory and keep from accidental reuse.
         for dev in self._iter_devs():
@@ -1304,6 +1348,15 @@ class RingBuilder(object):
                     if value is not None:
                         if key == 'meta':
                             if value not in dev.get(key):
+                                matched = False
+                        elif key == 'ip' or key == 'replication_ip':
+                            cdev = ''
+                            try:
+                                cdev = validate_and_normalize_address(
+                                    dev.get(key, ''))
+                            except ValueError:
+                                pass
+                            if cdev != value:
                                 matched = False
                         elif dev.get(key) != value:
                             matched = False

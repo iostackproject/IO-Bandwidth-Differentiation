@@ -88,6 +88,16 @@ attempting to write to or read the builder/ring files while operations are in
 progress. This can be useful in environments where ring management has been
 automated but the operator still needs to interact with the rings manually.
 
+If the ring builder is not producing the balances that you are
+expecting, you can gain visibility into what it's doing with the
+``--debug`` flag.::
+
+    swift-ring-builder <builder-file> rebalance --debug
+
+This produces a great deal of output that is mostly useful if you are
+either (a) attempting to fix the ring builder, or (b) filing a bug
+against the ring builder.
+
 -----------------------
 Scripting Ring Creation
 -----------------------
@@ -885,6 +895,31 @@ Metric Name               Description
 `object-expirer.timing`   Timing data for each object expiration attempt,
                           including ones resulting in an error.
 ========================  ====================================================
+
+Metrics for `object-reconstructor`:
+
+======================================================  ======================================================
+Metric Name                                             Description
+------------------------------------------------------  ------------------------------------------------------
+`object-reconstructor.partition.delete.count.<device>`  A count of partitions on <device> which were
+                                                        reconstructed and synced to another node because they
+                                                        didn't belong on this node. This metric is tracked
+                                                        per-device to allow for "quiescence detection" for
+                                                        object reconstruction activity on each device.
+`object-reconstructor.partition.delete.timing`          Timing data for partitions reconstructed and synced to
+                                                        another node because they didn't belong on this node.
+                                                        This metric is not tracked per device.
+`object-reconstructor.partition.update.count.<device>`  A count of partitions on <device> which were
+                                                        reconstructed and synced to another node, but also
+                                                        belong on this node. As with delete.count, this metric
+                                                        is tracked per-device.
+`object-reconstructor.partition.update.timing`          Timing data for partitions reconstructed which also
+                                                        belong on this node. This metric is not tracked
+                                                        per-device.
+`object-reconstructor.suffix.hashes`                    Count of suffix directories whose hash (of filenames)
+                                                        was recalculated.
+`object-reconstructor.suffix.syncs`                     Count of suffix directories reconstructed with ssync.
+======================================================  ======================================================
 
 Metrics for `object-replicator`:
 

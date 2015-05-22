@@ -24,7 +24,7 @@ from swift.common import swob, utils
 from swift.common.exceptions import ListingIterError, SegmentError
 from swift.common.middleware import slo
 from swift.common.swob import Request, Response, HTTPException
-from swift.common.utils import json
+from swift.common.utils import quote, json
 from test.unit.common.middleware.helpers import FakeSwift
 
 
@@ -140,6 +140,11 @@ class TestSloPutManifest(SloTestCase):
             {'Content-Length': '100', 'Etag': 'etagoftheobjectsegment'},
             None)
         self.app.register(
+            'HEAD', '/v1/AUTH_test/cont/object2',
+            swob.HTTPOk,
+            {'Content-Length': '100', 'Etag': 'etagoftheobjectsegment'},
+            None)
+        self.app.register(
             'HEAD', '/v1/AUTH_test/cont/object\xe2\x99\xa1',
             swob.HTTPOk,
             {'Content-Length': '100', 'Etag': 'etagoftheobjectsegment'},
@@ -148,6 +153,11 @@ class TestSloPutManifest(SloTestCase):
             'HEAD', '/v1/AUTH_test/cont/small_object',
             swob.HTTPOk,
             {'Content-Length': '10', 'Etag': 'etagoftheobjectsegment'},
+            None)
+        self.app.register(
+            'HEAD', u'/v1/AUTH_test/cont/あ_1',
+            swob.HTTPOk,
+            {'Content-Length': '1', 'Etag': 'a'},
             None)
         self.app.register(
             'PUT', '/v1/AUTH_test/c/man', swob.HTTPCreated, {}, None)
@@ -390,6 +400,46 @@ class TestSloPutManifest(SloTestCase):
         self.assertEquals(errors[3][1], 'Size Mismatch')
         self.assertEquals(errors[4][0], '/checktest/slob')
         self.assertEquals(errors[4][1], 'Etag Mismatch')
+
+    def test_handle_multipart_put_manifest_equal_slo(self):
+        test_json_data = json.dumps([{'path': '/cont/object',
+                                      'etag': 'etagoftheobjectsegment',
+                                      'size_bytes': 100}])
+        req = Request.blank(
+            '/v1/AUTH_test/cont/object?multipart-manifest=put',
+            environ={'REQUEST_METHOD': 'PUT'}, headers={'Accept': 'test'},
+            body=test_json_data)
+        status, headers, body = self.call_slo(req)
+        self.assertEqual(status, '409 Conflict')
+        self.assertEqual(self.app.call_count, 0)
+
+    def test_handle_multipart_put_manifest_equal_slo_non_ascii(self):
+        test_json_data = json.dumps([{'path': u'/cont/あ_1',
+                                      'etag': 'a',
+                                      'size_bytes': 1}])
+        path = quote(u'/v1/AUTH_test/cont/あ_1')
+        req = Request.blank(
+            path + '?multipart-manifest=put',
+            environ={'REQUEST_METHOD': 'PUT'}, headers={'Accept': 'test'},
+            body=test_json_data)
+        status, headers, body = self.call_slo(req)
+        self.assertEqual(status, '409 Conflict')
+        self.assertEqual(self.app.call_count, 0)
+
+    def test_handle_multipart_put_manifest_equal_last_segment(self):
+        test_json_data = json.dumps([{'path': '/cont/object',
+                                      'etag': 'etagoftheobjectsegment',
+                                      'size_bytes': 100},
+                                     {'path': '/cont/object2',
+                                      'etag': 'etagoftheobjectsegment',
+                                      'size_bytes': 100}])
+        req = Request.blank(
+            '/v1/AUTH_test/cont/object2?multipart-manifest=put',
+            environ={'REQUEST_METHOD': 'PUT'}, headers={'Accept': 'test'},
+            body=test_json_data)
+        status, headers, body = self.call_slo(req)
+        self.assertEqual(status, '409 Conflict')
+        self.assertEqual(self.app.call_count, 1)
 
 
 class TestSloDeleteManifest(SloTestCase):
@@ -1431,9 +1481,10 @@ class TestSloGetManifest(SloTestCase):
 
         self.assertEqual(status, '409 Conflict')
         self.assertEqual(self.app.call_count, 10)
-        err_log = self.slo.logger.log_dict['exception'][0][0][0]
-        self.assertTrue(err_log.startswith('ERROR: An error occurred '
-                                           'while retrieving segments'))
+        error_lines = self.slo.logger.get_lines_for_level('error')
+        self.assertEqual(len(error_lines), 1)
+        self.assertTrue(error_lines[0].startswith(
+            'ERROR: An error occurred while retrieving segments'))
 
     def test_get_with_if_modified_since(self):
         # It's important not to pass the If-[Un]Modified-Since header to the
@@ -1508,9 +1559,10 @@ class TestSloGetManifest(SloTestCase):
         status, headers, body = self.call_slo(req)
 
         self.assertEqual('409 Conflict', status)
-        err_log = self.slo.logger.log_dict['exception'][0][0][0]
-        self.assertTrue(err_log.startswith('ERROR: An error occurred '
-                                           'while retrieving segments'))
+        error_lines = self.slo.logger.get_lines_for_level('error')
+        self.assertEqual(len(error_lines), 1)
+        self.assertTrue(error_lines[0].startswith(
+            'ERROR: An error occurred while retrieving segments'))
 
     def test_invalid_json_submanifest(self):
         self.app.register(
@@ -1585,9 +1637,10 @@ class TestSloGetManifest(SloTestCase):
         status, headers, body = self.call_slo(req)
 
         self.assertEqual('409 Conflict', status)
-        err_log = self.slo.logger.log_dict['exception'][0][0][0]
-        self.assertTrue(err_log.startswith('ERROR: An error occurred '
-                                           'while retrieving segments'))
+        error_lines = self.slo.logger.get_lines_for_level('error')
+        self.assertEqual(len(error_lines), 1)
+        self.assertTrue(error_lines[0].startswith(
+            'ERROR: An error occurred while retrieving segments'))
 
     def test_first_segment_mismatched_size(self):
         self.app.register('GET', '/v1/AUTH_test/gettest/manifest-badsize',
@@ -1603,9 +1656,10 @@ class TestSloGetManifest(SloTestCase):
         status, headers, body = self.call_slo(req)
 
         self.assertEqual('409 Conflict', status)
-        err_log = self.slo.logger.log_dict['exception'][0][0][0]
-        self.assertTrue(err_log.startswith('ERROR: An error occurred '
-                                           'while retrieving segments'))
+        error_lines = self.slo.logger.get_lines_for_level('error')
+        self.assertEqual(len(error_lines), 1)
+        self.assertTrue(error_lines[0].startswith(
+            'ERROR: An error occurred while retrieving segments'))
 
     def test_download_takes_too_long(self):
         the_time = [time.time()]
@@ -1657,9 +1711,10 @@ class TestSloGetManifest(SloTestCase):
         status, headers, body = self.call_slo(req)
 
         self.assertEqual('409 Conflict', status)
-        err_log = self.slo.logger.log_dict['exception'][0][0][0]
-        self.assertTrue(err_log.startswith('ERROR: An error occurred '
-                                           'while retrieving segments'))
+        error_lines = self.slo.logger.get_lines_for_level('error')
+        self.assertEqual(len(error_lines), 1)
+        self.assertTrue(error_lines[0].startswith(
+            'ERROR: An error occurred while retrieving segments'))
 
 
 class TestSloBulkLogger(unittest.TestCase):

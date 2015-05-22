@@ -32,7 +32,7 @@ import random
 
 from swift.account.backend import AccountBroker
 from swift.common.utils import Timestamp
-from test.unit import patch_policies, with_tempdir
+from test.unit import patch_policies, with_tempdir, make_timestamp_iter
 from swift.common.db import DatabaseConnectionError
 from swift.common.storage_policy import StoragePolicy, POLICIES
 
@@ -747,7 +747,7 @@ def prespi_AccountBroker_initialize(self, conn, put_timestamp, **kwargs):
     The AccountBroker initialze() function before we added the
     policy stat table.  Used by test_policy_table_creation() to
     make sure that the AccountBroker will correctly add the table
-    for cases where the DB existed before the policy suport was added.
+    for cases where the DB existed before the policy support was added.
 
     :param conn: DB connection object
     :param put_timestamp: put timestamp
@@ -1117,6 +1117,45 @@ class TestAccountBrokerBeforeSPI(TestAccountBroker):
 
         # full migration successful
         with broker.get() as conn:
+            conn.execute('SELECT * FROM policy_stat')
+            conn.execute('SELECT storage_policy_index FROM container')
+
+    @with_tempdir
+    def test_pre_storage_policy_replication(self, tempdir):
+        ts = make_timestamp_iter()
+
+        # make and two account database "replicas"
+        old_broker = AccountBroker(os.path.join(tempdir, 'old_account.db'),
+                                   account='a')
+        old_broker.initialize(ts.next().internal)
+        new_broker = AccountBroker(os.path.join(tempdir, 'new_account.db'),
+                                   account='a')
+        new_broker.initialize(ts.next().internal)
+
+        # manually insert an existing row to avoid migration for old database
+        with old_broker.get() as conn:
+            conn.execute('''
+                INSERT INTO container (name, put_timestamp,
+                    delete_timestamp, object_count, bytes_used,
+                    deleted)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', ('test_name', ts.next().internal, 0, 1, 2, 0))
+            conn.commit()
+
+        # get replication info and rows form old database
+        info = old_broker.get_info()
+        rows = old_broker.get_items_since(0, 10)
+
+        # "send" replication rows to new database
+        new_broker.merge_items(rows, info['id'])
+
+        # make sure "test_name" container in new database
+        self.assertEqual(new_broker.get_info()['container_count'], 1)
+        for c in new_broker.list_containers_iter(1, None, None, None, None):
+            self.assertEqual(c, ('test_name', 1, 2, 0))
+
+        # full migration successful
+        with new_broker.get() as conn:
             conn.execute('SELECT * FROM policy_stat')
             conn.execute('SELECT storage_policy_index FROM container')
 
