@@ -40,7 +40,7 @@ from swift.proxy.controllers.base import get_container_info
 from swift.common.swob import HTTPBadRequest, HTTPForbidden, \
     HTTPMethodNotAllowed, HTTPNotFound, HTTPPreconditionFailed, \
     HTTPServerError, HTTPException, HTTPOk, Request, Response, HTTPServiceUnavailable
-     swift.common.exceptions import APIVersionError
+from swift.common.exceptions import APIVersionError
 from swift.common.direct_client import http_connect
 from swift.common.http import HTTP_NO_CONTENT, HTTP_INSUFFICIENT_STORAGE, \
     is_success, is_server_error
