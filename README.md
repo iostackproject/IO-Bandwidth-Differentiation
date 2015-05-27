@@ -4,11 +4,6 @@
  * gcc -shared -Wl,-soname,libiostackmodule.so -o libiostackmodule.so iostackmodule.o
  * cp to a suitable location (i.e., /usr/lib/libiostackmodule.so)
 
-# BWGatherer.py
-  Creates a /tmp/bwfile with disk BW information each second, the file will be used
-  to provide BW statistics to the proxy so it can select an object server
-
-
 # Swift
 
 A distributed object storage system designed to scale from a single machine
