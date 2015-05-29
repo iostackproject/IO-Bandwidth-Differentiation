@@ -307,23 +307,28 @@ class Application(object):
                 osinfo_json[nodeid] = json.loads(resp.read())
         return osinfo_json
 
-    def bwmod(self, req, osinfo_data):
-        try:
-            r = filter(bool, req.path.split('/'))
-            r = r[1:] # rm 'bwmod'
-            bw = int(r.pop())
-        except Exception:
-            return HTTPBadRequest(request=req)
-        res = HTTPNotFound(request=req)
-        for os in osinfo_data:
-            for dev in osinfo_data[os]:
-                for index in osinfo_data[os][dev]:
-                    for oid in osinfo_data[os][dev][index]['oid']:
-                        if oid == "/" + "/".join(r):
-                            node = os.split(':')
-                            conn = http_connect(node[0], node[1], req.path[1:], "",
-                                            'GET', "", headers="")
-                            res = HTTPOk(request=req, body=conn.getresponse().read())
+
+    def get_bwdict(self):
+        nodes = POLICIES.default.object_ring.devs
+        dict_json = dict()
+        for node in nodes:
+            conn = http_connect(node['ip'], node['port'],"bwdict", "",
+                           'GET', "", headers="")
+            resp = conn.getresponse()
+            if is_success(resp.status):
+                nodeid = node['ip'] + ':' + str(node['port'])
+                dict_json[nodeid] = json.loads(resp.read())
+        return dict_json
+
+    def bwmod(self, req):
+        nodes = POLICIES.default.object_ring.devs
+        for node in nodes:
+            conn = http_connect(node['ip'], node['port'], req.path[1:].replace('%3A', ':'), "",
+                            'GET', "", headers="")
+            resp = conn.getresponse()
+            if not is_success(resp.status):
+                return Response(request=req, status=resp.status)
+            res = HTTPOk(request=req, body=resp.read())
         return res
 
 
@@ -384,8 +389,10 @@ class Application(object):
                     return HTTPOk(request=req, body=json.dumps(self.get_osinfo_data()), content_type="application/json")
 
                 if 'bwmod' in req.path:
-                    osinfo_data = self.get_osinfo_data()
-                    return self.bwmod(req, osinfo_data)
+                    return self.bwmod(req)
+
+                if 'bwdict' in req.path:
+                    return HTTPOk(request=req, body=json.dumps(self.get_bwdict()), content_type="application/json")
 
                 controller, path_parts = self.get_controller(req)
                 p = req.path_info
@@ -494,7 +501,7 @@ class Application(object):
         elif self.sorting_method == 'affinity':
             nodes.sort(key=self.read_affinity_sort_key)
 
-        self.logger.error(_('List %s %s'),self.sorting_method, nodes)
+        #self.logger.error(_('List %s %s'),self.sorting_method, nodes)
 	return nodes
 
 

@@ -87,7 +87,7 @@ def get_bwlimit(request):
     :returns: value from the bwlimit header (-1 if not found)
     """
     bwlimit = request.headers.get('Bwlimit', '-1')
-    return bwlimit
+    return int(bwlimit)
 
 def get_name_and_placement(request, minsegs=1, maxsegs=None,
                            rest_with_last=False):

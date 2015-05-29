@@ -26,7 +26,7 @@ import socket
 import math
 from swift import gettext_ as _
 from hashlib import md5
-
+from collections import defaultdict
 from eventlet import sleep, wsgi, Timeout
 
 from swift.common.utils import public, get_logger, \
@@ -109,6 +109,7 @@ class ObjectController(BaseStorageServer):
         """
         super(ObjectController, self).__init__(conf)
         self.logger = logger or get_logger(conf, log_route='object-server')
+        self.bwlimit = defaultdict(lambda: dict())
         self.node_timeout = int(conf.get('node_timeout', 3))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
         self.client_timeout = int(conf.get('client_timeout', 60))
@@ -682,7 +683,13 @@ class ObjectController(BaseStorageServer):
         """Handle HTTP GET requests for the Swift Object Server."""
         device, partition, account, container, obj, policy = \
             get_name_and_placement(request, 5, 5, True)
-        bwlimit = get_bwlimit(request)
+
+        if get_bwlimit(request) == -1:
+                bwlimit = self.bw_update(account, policy.name, True)
+        else:
+            self.bwlimit[account][policy.name] = get_bwlimit(request)
+            bwlimit = self.bw_update(account, policy.name, True)
+
         keep_cache = self.keep_cache_private or (
             'X-Auth-Token' not in request.headers and
             'X-Storage-Token' not in request.headers)
@@ -733,6 +740,7 @@ class ObjectController(BaseStorageServer):
                 headers['X-Backend-Timestamp'] = e.timestamp.internal
             resp = HTTPNotFound(request=request, headers=headers,
                                 conditional_response=True)
+            self.bw_update(account, policy.name, False)
         return resp
 
     @public
@@ -885,6 +893,112 @@ class ObjectController(BaseStorageServer):
     def SSYNC(self, request):
         return Response(app_iter=ssync_receiver.Receiver(self, request)())
 
+    def _get_osinfo_data(self, req):
+
+            # Submit oid - bw information about the current worker that will be the only one...
+            content = defaultdict(lambda: dict())
+            num = defaultdict(lambda: 0)
+            for policy in POLICIES:
+                if len(self._diskfile_router[policy].threadpools) > 0:
+                    for k,v in self._diskfile_router[policy].threadpools.iteritems():
+                        v.checkQueues()
+                        v.removeQueues()
+                        new = True
+                        for k2,v2 in v._worker2disk.iteritems():
+                            for k3 in content[k]:
+                                if content[k][k3]['account'] == v._diskreaders[int(v2)][0]._account and \
+                                    content[k][k3]['policy'] == policy.name:
+                                    for obj in v._diskreaders[int(v2)]:
+                                        obje = dict()
+                                        obje['oid'] = obj._data_name
+                                        obje['oid_bw'] = obj._limit
+                                        obje['oid_calculated_BW'] = v._calculated_BW[int(v2)]
+                                        content[k][k3]['objects'].append(obje)
+                                    try:
+                                        content[k][k3]['needed_BW'] = self.bwlimit[content[k][k3]['account']][policy.name]
+                                    except Exception:
+                                        self.bw_update(content[k][k3]['account'], policy.name, False)
+                                        content[k][k3]['needed_BW'] = self.bwlimit[content[k][k3]['account']][policy.name]
+                                    new = False
+                            if new:
+                                item = dict()
+                                item['identifier'] = v._id
+                                item['account'] = v._diskreaders[int(v2)][0]._account
+                                item['objects'] = []
+                                for obj in v._diskreaders[int(v2)]:
+                                    obje = dict()
+                                    obje['oid'] = obj._data_name
+                                    obje['oid_bw'] = obj._limit
+                                    obje['oid_calculated_BW'] = v._calculated_BW[int(v2)]
+                                    item['objects'].append(obje)
+                                item['policy'] = policy.name
+                                try:
+                                    item['needed_BW'] = self.bwlimit[item['account']][policy.name]
+                                except Exception:
+                                    self.bw_update(item['account'], policy.name, False)
+                                    content[k][k3]['needed_BW'] = self.bwlimit[item['account']][policy.name]
+                                content[k][num[k]] = item
+                                num[k]+=1
+            return HTTPOk(request=req, body=json.dumps(content), content_type="application/json")
+
+    def bw_update(self, acc, pol, get):
+        nobjects = (1 if get else 0)
+        for policy in POLICIES: 
+            if len(self._diskfile_router[policy].threadpools) > 0:
+                for k,v in self._diskfile_router[policy].threadpools.iteritems():
+                    for k2,v2 in v._worker2disk.iteritems():
+                        for obj in v._diskreaders[int(v2)]: 
+                            if obj._account == acc and pol==policy.name:
+                                nobjects += 1              
+        if nobjects == 0 or not pol:
+            return None        
+        try:
+            self.bwlimit[acc][pol]
+        except Exception:
+            self.bwlimit[acc][pol] = -1
+
+        for policy in POLICIES:
+            if len(self._diskfile_router[policy].threadpools) > 0:
+                for k,v in self._diskfile_router[policy].threadpools.iteritems():
+                    for k2,v2 in v._worker2disk.iteritems():
+                        for idx, obj in enumerate(v._diskreaders[int(v2)]):
+                            if obj._account == acc and pol==policy.name:
+                                v._diskreaders[int(v2)][idx]._limit = self.bwlimit[acc][pol]/nobjects
+
+        return self.bwlimit[acc][pol]/nobjects
+    
+    def setbw(self, path):
+        def is_Int(s):
+            try: 
+                int(s)
+                return True
+            except ValueError:
+                return False
+
+        r = filter(bool, path.split('/'))
+        method = r.pop(0) #bwmod
+        try:
+            bw = (int(r.pop()) if (r and is_Int(r[-1])) else None)
+            account = (r.pop(0) if r else None)
+            policy = (r.pop(0).replace('%3A', ':') if r else None)
+            if bw:
+                if policy:
+                    self.bwlimit[account][policy] = bw
+                else:
+                    for pol in POLICIES:
+                        self.bwlimit[account][pol.name] = bw
+            else:
+                if not account and not policy:
+                    self.bwlimit = defaultdict(lambda: dict())
+                elif not policy:
+                    self.bwlimit.pop(account,None)
+                else:
+                    self.bwlimit[account].pop(policy, None)
+        except Exception:
+            return None
+        return (account, policy, bw)
+
+
     def __call__(self, env, start_response):
         """WSGI Application entry point for the Swift Object Server."""
         start_time = time.time()
@@ -892,47 +1006,21 @@ class ObjectController(BaseStorageServer):
         self.logger.txn_id = req.headers.get('x-trans-id', None)
 
         if 'osinfo' in req.path:
-
-            # Submit oid - bw information about the current worker that will be the only one...
-            content = dict()
-            for policy in POLICIES:
-                if len(self._diskfile_router[policy].threadpools) > 0:
-                    self.logger.warning(_("Marc %s"), policy)
-                    for k,v in self._diskfile_router[policy].threadpools.iteritems():
-                        v.checkQueues()
-                        v.removeQueues()
-                        thr = dict()
-                        for k2,v2 in v._worker2disk.iteritems():
-                            item = dict()
-                            item['identifier'] = v._id
-                            item['oid'] = []
-                            for obj in v._diskreaders[int(v2)]:
-                                item['oid'].append(obj._data_name)
-                            item['calculated_BW'] = v._calculated_BW[int(v2)]
-                            item['needed_BW'] = v._needed_BW[int(v2)]
-                            thr[str(v2)] = item
-                        content[k] = thr
-
-            return HTTPOk(request=req, body=json.dumps(content), content_type="application/json")(env, start_response)
-        
+            return self._get_osinfo_data(req)(env, start_response)
         if 'bwmod' in req.path:
             try:
-                r = filter(bool, req.path.split('/'))
-                r = r[1:] # rm 'bwmod'
-                bw = int(r.pop())
+                account,policy,bw = self.setbw(req.path)
             except Exception:
-                return HTTPBadRequest(request=req)
+                return HTTPBadRequest(request=req)(env, start_response)
+            if not policy:
+                for policy in POLICIES:
+                    self.bw_update(account, policy.name, False)
+            else:
+                self.bw_update(account, policy, False)
+            return HTTPOk(request=req)(env, start_response)
 
-            if len(self._diskfile_router[policy].threadpools) > 0:
-                for k,v in self._diskfile_router[policy].threadpools.iteritems():
-                    for k2,v2 in v._worker2disk.iteritems():
-                        for obj in v._diskreaders[int(v2)]: 
-                            if obj._data_name == ("/" + "/".join(r)):  
-                                for idx, obj in enumerate(v._diskreaders[int(v2)]):
-                                        v._diskreaders[int(v2)][idx]._limit = int(bw)
-                                return HTTPOk(request=req)(env, start_response)
-            return HTTPNotFound(request=req)(env, start_response)
-
+        if 'bwdict' in req.path:
+            return HTTPOk(request=req, body=json.dumps(self.bwlimit), content_type="application/json")(env, start_response)
         
         if not check_utf8(req.path_info):
             res = HTTPPreconditionFailed(body='Invalid UTF8 or contains NULL')
