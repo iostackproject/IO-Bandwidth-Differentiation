@@ -893,11 +893,17 @@ class ObjectController(BaseStorageServer):
     def SSYNC(self, request):
         return Response(app_iter=ssync_receiver.Receiver(self, request)())
 
-    def _get_osinfo_data(self, req):
+    def bw_clear(self):
+        for acc in self.bwlimit:
+            for pol in self.bwlimit[acc]:
+                self.bw_update(acc, pol, False)
+
+    def _get_osinfo_data(self):
 
             # Submit oid - bw information about the current worker that will be the only one...
             content = defaultdict(lambda: dict())
             num = defaultdict(lambda: 0)
+            self.bw_clear()
             for policy in POLICIES:
                 if len(self._diskfile_router[policy].threadpools) > 0:
                     for k,v in self._diskfile_router[policy].threadpools.iteritems():
@@ -939,7 +945,7 @@ class ObjectController(BaseStorageServer):
                                     content[k][k3]['needed_BW'] = self.bwlimit[item['account']][policy.name]
                                 content[k][num[k]] = item
                                 num[k]+=1
-            return HTTPOk(request=req, body=json.dumps(content), content_type="application/json")
+            return content
 
     def bw_update(self, acc, pol, get):
         nobjects = (1 if get else 0)
@@ -949,12 +955,16 @@ class ObjectController(BaseStorageServer):
                     for k2,v2 in v._worker2disk.iteritems():
                         for obj in v._diskreaders[int(v2)]: 
                             if obj._account == acc and pol==policy.name:
-                                nobjects += 1              
-        if nobjects == 0 or not pol:
+                                nobjects += 1
+        if nobjects == 0:
+            if not self.bwlimit[acc]:
+                    self.bwlimit.pop(acc, None)
+            elif pol in self.bwlimit[acc] and self.bwlimit[acc][pol] == -1:
+                self.bwlimit[acc].pop(pol, None)
+                if not self.bwlimit[acc]:
+                    self.bwlimit.pop(acc, None)
             return None        
-        try:
-            self.bwlimit[acc][pol]
-        except Exception:
+        if not pol in self.bwlimit[acc]:
             self.bwlimit[acc][pol] = -1
 
         for policy in POLICIES:
@@ -977,11 +987,15 @@ class ObjectController(BaseStorageServer):
 
         r = filter(bool, path.split('/'))
         method = r.pop(0) #bwmod
+        if len(r) > 3:
+            return None
         try:
             bw = (int(r.pop()) if (r and is_Int(r[-1])) else None)
             account = (r.pop(0) if r else None)
             policy = (r.pop(0).replace('%3A', ':') if r else None)
             if bw:
+                if not account:
+                    return None
                 if policy:
                     self.bwlimit[account][policy] = bw
                 else:
@@ -1006,7 +1020,7 @@ class ObjectController(BaseStorageServer):
         self.logger.txn_id = req.headers.get('x-trans-id', None)
 
         if 'osinfo' in req.path:
-            return self._get_osinfo_data(req)(env, start_response)
+            return HTTPOk(request=req, body = json.dumps(self._get_osinfo_data()), content_type="application/json")(env, start_response)
         if 'bwmod' in req.path:
             try:
                 account,policy,bw = self.setbw(req.path)
@@ -1020,6 +1034,7 @@ class ObjectController(BaseStorageServer):
             return HTTPOk(request=req)(env, start_response)
 
         if 'bwdict' in req.path:
+
             return HTTPOk(request=req, body=json.dumps(self.bwlimit), content_type="application/json")(env, start_response)
         
         if not check_utf8(req.path_info):
