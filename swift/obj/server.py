@@ -903,7 +903,6 @@ class ObjectController(BaseStorageServer):
             # Submit oid - bw information about the current worker that will be the only one...
             content = defaultdict(lambda: dict())
             num = defaultdict(lambda: 0)
-            self.bw_clear()
             for policy in POLICIES:
                 if len(self._diskfile_router[policy].threadpools) > 0:
                     for k,v in self._diskfile_router[policy].threadpools.iteritems():
@@ -1020,6 +1019,7 @@ class ObjectController(BaseStorageServer):
         self.logger.txn_id = req.headers.get('x-trans-id', None)
 
         if 'osinfo' in req.path:
+            self.bw_clear()
             return HTTPOk(request=req, body = json.dumps(self._get_osinfo_data()), content_type="application/json")(env, start_response)
         if 'bwmod' in req.path:
             try:
@@ -1034,7 +1034,7 @@ class ObjectController(BaseStorageServer):
             return HTTPOk(request=req)(env, start_response)
 
         if 'bwdict' in req.path:
-
+            self.bw_clear()
             return HTTPOk(request=req, body=json.dumps(self.bwlimit), content_type="application/json")(env, start_response)
         
         if not check_utf8(req.path_info):
