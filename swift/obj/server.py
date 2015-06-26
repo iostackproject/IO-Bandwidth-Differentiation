@@ -980,7 +980,7 @@ class ObjectController(BaseStorageServer):
         def is_Int(s):
             try: 
                 int(s)
-                return True
+                return (True if int(s) > 0 else False)
             except ValueError:
                 return False
 
@@ -1020,7 +1020,8 @@ class ObjectController(BaseStorageServer):
 
         if 'osinfo' in req.path:
             self.bw_clear()
-            return HTTPOk(request=req, body = json.dumps(self._get_osinfo_data()), content_type="application/json")(env, start_response)
+            return HTTPOk(request=req, body = json.dumps(self._get_osinfo_data()), 
+                content_type="application/json")(env, start_response)
         if 'bwmod' in req.path:
             try:
                 account,policy,bw = self.setbw(req.path)
@@ -1035,7 +1036,8 @@ class ObjectController(BaseStorageServer):
 
         if 'bwdict' in req.path:
             self.bw_clear()
-            return HTTPOk(request=req, body=json.dumps(self.bwlimit), content_type="application/json")(env, start_response)
+            return HTTPOk(request=req, body=json.dumps(self.bwlimit), 
+                content_type="application/json")(env, start_response)
         
         if not check_utf8(req.path_info):
             res = HTTPPreconditionFailed(body='Invalid UTF8 or contains NULL')

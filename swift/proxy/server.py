@@ -299,12 +299,16 @@ class Application(object):
         nodes = POLICIES.default.object_ring.devs
         osinfo_json = dict()
         for node in nodes:
-            conn = http_connect(node['ip'], node['port'],"osinfo", "",
+            try:
+                conn = http_connect(node['ip'], node['port'],"osinfo", "",
                            'GET', "", headers="")
-            resp = conn.getresponse()
-            if is_success(resp.status):
+                resp = conn.getresponse()
+                if is_success(resp.status):
+                    nodeid = node['ip'] + ':' + str(node['port'])
+                    osinfo_json[nodeid] = json.loads(resp.read())
+            except Exception:
                 nodeid = node['ip'] + ':' + str(node['port'])
-                osinfo_json[nodeid] = json.loads(resp.read())
+                osinfo_json[nodeid] = "Error with Object Server"
         return osinfo_json
 
 
@@ -312,23 +316,30 @@ class Application(object):
         nodes = POLICIES.default.object_ring.devs
         dict_json = dict()
         for node in nodes:
-            conn = http_connect(node['ip'], node['port'],"bwdict", "",
+            try:
+                conn = http_connect(node['ip'], node['port'],"bwdict", "",
                            'GET', "", headers="")
-            resp = conn.getresponse()
-            if is_success(resp.status):
+                resp = conn.getresponse()
+                if is_success(resp.status):
+                    nodeid = node['ip'] + ':' + str(node['port'])
+                    dict_json[nodeid] = json.loads(resp.read())
+            except Exception:
                 nodeid = node['ip'] + ':' + str(node['port'])
-                dict_json[nodeid] = json.loads(resp.read())
+                dict_json[nodeid] = "Error with Object Server"
         return dict_json
 
     def bwmod(self, req):
         nodes = POLICIES.default.object_ring.devs
         for node in nodes:
-            conn = http_connect(node['ip'], node['port'], req.path[1:].replace('%3A', ':'), "",
-                            'GET', "", headers="")
-            resp = conn.getresponse()
-            if not is_success(resp.status):
-                return Response(request=req, status=resp.status)
-            res = HTTPOk(request=req, body=resp.read())
+            try:
+                conn = http_connect(node['ip'], node['port'], req.path[1:].replace('%3A', ':'), "",
+                                'GET', "", headers="")
+                resp = conn.getresponse()
+                if not is_success(resp.status):
+                    return Response(request=req, status=resp.status)
+                res = HTTPOk(request=req, body=resp.read())
+            except Exception:
+                pass
         return res
 
 
@@ -386,13 +397,15 @@ class Application(object):
 
             try:
                 if 'osinfo' in req.path:
-                    return HTTPOk(request=req, body=json.dumps(self.get_osinfo_data()), content_type="application/json")
+                    return HTTPOk(request=req, body=json.dumps(self.get_osinfo_data()), 
+                        content_type="application/json")
 
                 if 'bwmod' in req.path:
                     return self.bwmod(req)
 
                 if 'bwdict' in req.path:
-                    return HTTPOk(request=req, body=json.dumps(self.get_bwdict()), content_type="application/json")
+                    return HTTPOk(request=req, body=json.dumps(self.get_bwdict()), 
+                        content_type="application/json")
 
                 controller, path_parts = self.get_controller(req)
                 p = req.path_info
