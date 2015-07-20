@@ -13,14 +13,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os, stat, subprocess, shlex, re, sys, time, psutil
-import threading
+import os, stat, subprocess, shlex, re, sys, time, psutil, pika
+import threading, ConfigParser, requests
 from swift import gettext_ as _
 from swift.common.utils import cache_from_env, get_logger, register_swift_info
 from swift.common.swob import Request, Response
 
 
-def threaded_function(event, name, BWstats):
+
+def diskstats_threaded(event, name, BWstats):
     _waittime = 1
     stats = dict()
     devices = psutil.disk_partitions(all=False)
@@ -38,8 +39,15 @@ def threaded_function(event, name, BWstats):
             BWdisk[i] = ((read-oldread)/_waittime, (write-oldwrite)/_waittime)
         BWstats[name] = BWdisk
         
+def bwinfo_threaded(event, name, channel, interval, queue, proxyip, proxyport):
+    while True:
+        if event.wait(int(interval)):
+            break
+        address = "http://" + proxyip + ":" + proxyport + "/bwdict/"
+        r = requests.get(address)
+        channel.basic_publish(exchange='', routing_key=queue, body=r.content)
 
-def _getDiskStats (disk):
+def _getDiskStats(disk):
     """
     Aggregates all the partitions of the same disk 
 
@@ -60,9 +68,12 @@ def _getDiskStats (disk):
             write += stats[i].write_bytes/(1024.0*1024.0)
     return (read,write)
 
+
+
+
 class BWInfoMiddleware(object):
     """
-    Stores the BW info at /bwinfo
+    Stores the BW info at /bwinfo middleware
     """
 
     def __init__(self, app, conf, logger=None):
@@ -72,17 +83,49 @@ class BWInfoMiddleware(object):
         self.logger = logger or get_logger(conf, log_route='bwlimit')
         self.event = threading.Event()
         self.BWstats = dict()
-        self.th = threading.Thread(target = threaded_function, name = conf.get('__file__', ''), 
-                                    args = (self.event, conf.get('__file__', ''), self.BWstats,))
-        self.th.start()
+        self._get_bwmomconf()
+
+        if self.bwmomenabled:
+            self.connection = pika.BlockingConnection(pika.ConnectionParameters(self.ip))
+            self.channel = self.connection.channel()
+            self.channel.queue_declare(queue=self.queue)      
+
+            self.thbw = threading.Thread(target = bwinfo_threaded, name = conf.get('__file__', ''), 
+                                        args = (self.event, conf.get('__file__', ''), self.channel, self.interval, 
+                                            self.queue, self.proxyip, self.proxyport,))
+            self.thbw.start()
+            time.sleep(0.1)
+
+        self.thstats = threading.Thread(target = diskstats_threaded, name = conf.get('__file__', ''), 
+                                        args = (self.event, conf.get('__file__', ''), self.BWstats,))
+        self.thstats.start()
         time.sleep(0.1)
+        
 
     def __del__(self):
         try:
             self.event.set()
-            self.th.join()
+            if self.bwmomenabled:
+                self.thbw.join()
+                self.connection.close()
+            self.thstats.join()
+            
         except RuntimeError as err:
             pass
+
+    def _get_bwmomconf(self):
+        conf = ConfigParser.ConfigParser()   
+        try:
+            conf.read('/etc/swift/bwmom.conf')
+            self.bwmomenabled = conf.getboolean('default', 'enabled')
+            self.ip = conf.get('default', 'ip')
+            self.proxyip = conf.get('proxy', 'ip')
+            self.proxyport = conf.get('proxy', 'port')
+            self.interval = conf.get('default', 'interval')
+            self.queue = conf.get('default', 'queue')
+        except Exception as err:
+            print("Error reading bwmom.conf")
+            self.bwmomenabled = False
 
 
     def get_mount_point(self, path):
