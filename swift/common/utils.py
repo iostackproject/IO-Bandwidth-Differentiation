@@ -3258,7 +3258,7 @@ class IOStackThreadPool(object):
             priority = 0    # Highest priority 
             # If our BW is higher
         
-            if (self._needed_BW[index] == -1 or (self._calculated_BW[index] > (self._needed_BW[index] + 0.2) )):
+            if (self._needed_BW[index] == -1 or (sum(self._calculated_BW) > (sum(self._needed_BW) + 0.2) )):
                 priority = 7
                 
             try:
