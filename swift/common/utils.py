@@ -3188,8 +3188,8 @@ class IOStackThreadPool(object):
         for i in xrange(self.nthreads):
             if (self._indexworker[i] == -1): continue
             
-            if ((now - self._last_REQ[i]) > 10 and not self._last_REQ[i] == 0): # 10 seconds
-                logging.warning("%(i)s Inactive Queue Timeout",{'i':i})
+            if ((now - self._last_REQ[i]) > 5 and not self._last_REQ[i] == 0): # 10 seconds
+                #logging.warning("%(i)s Inactive Queue Timeout",{'i':i})
                 self._last_REQ[i] = 0 
               
                 self._indexworker[i] = -1
@@ -3202,7 +3202,7 @@ class IOStackThreadPool(object):
         total_threads = self.nthreads
         for i in reversed(xrange(total_threads)):
             if (i == self.nthreads-1 and self._indexworker[i] == -1):
-                logging.warning("%(i)s Removing Queue",{'i':i})
+                #logging.warning("%(i)s Removing Queue",{'i':i})
                 self._run_queues[i].put(None)
                 self._indexworker.pop()
                 self._last_REQ.pop()
@@ -3233,6 +3233,18 @@ class IOStackThreadPool(object):
                 #logging.warning("%(index)s %(calculated)s > %(needed)s",{'index':index,'calculated':self._calculated_BW[index],'needed':self._needed_BW[index]})
         return totaltime, totalsize
   
+    def sumesp(self, queue, account, total):
+	total = 0
+	i = 0
+	now = time.time()
+	for value in queue:
+		if self._diskreaders[i][0]._account == account and (total or ((now - self._last_REQ[i]) < 5)):
+			total += value
+		i = i + 1
+	return total
+
+
+
     def _worker(self, work_queue, result_queue, index):
         """
         Pulls an item from the queue and runs it, then puts the result into
@@ -3254,20 +3266,31 @@ class IOStackThreadPool(object):
 
            
             #Calculate the attained BW
+	    for i in xrange(self.nthreads):
+		self.update_bw_stats(i)
+            
             totaltime, totalsize = self.update_bw_stats(index)
             priority = 0    # Highest priority 
             # If our BW is higher
-        
-            if (self._needed_BW[index] == -1 or (sum(self._calculated_BW) > (sum(self._needed_BW) + 0.2) )):
+	    calc = self.sumesp(self._calculated_BW,self._diskreaders[index][0]._account,False)
+	    need = self.sumesp(self._needed_BW,self._diskreaders[index][0]._account,True)
+
+            if (self._needed_BW[index] == -1) or (calc > need):
                 priority = 7
-                
+
+	    if (priority == 0 and calc > need):
+		priority = 7
+		
+
+	    #logging.warning("%(index)s|%(account)s %(calculated)s > %(needed)s",{'index':index,'calculated':calc,'needed':need,'account':self._diskreaders[index][0]._account})
+    
             try:
                 """ 
                 GetPID does not return the correct thread id, so we need to use a gettid syscall.
 
                 """
                 
-                if (self._last_Prio[index] != priority):
+                if (self._last_Prio[index] != priority):		# Check if needed
                     p = psutil.Process(self._augread.gettid())
                     if (priority == 0):
                         p.set_ionice(2,0)
@@ -3281,6 +3304,7 @@ class IOStackThreadPool(object):
                     size = args[0]/(1024.0*1024.0)
                     mb, starttime = self._calculate_BW[index]
                     self._calculate_BW[index] = (mb + size, starttime)
+		    totaltime, totalsize = self.update_bw_stats(index)
 
                 self._last_REQ[index] = time.time()
             except BaseException:
@@ -3422,7 +3446,7 @@ class IOStackThreadPool(object):
                 self._worker2disk[identifier] = index
                 queue_num = index
 
-                self._calculated_BW[index] = 0
+                self._calculated_BW[index] = 0   # We assume the initial BW will be the limit
                 self._last_REQ[index] = time.time()
                 self._last_Prio[index] = -1
                 self._calculate_BW[index] = (0,time.time())   # KB, start
@@ -3430,7 +3454,7 @@ class IOStackThreadPool(object):
                 self._diskreaders[index] = [diskfilereader]
                 # TODO: If we sent from the client, probably we need it per AUTH, then each AUTH has its queue and not each DATA_FILE... However how this maps to multiple obkect stores, 
                 # Should we limit among them....We need that an external entity to tune each individual participating object store correctly and dynamically
-                logging.warning("I am running to this queue  %(queue)s for %(disk)s / %(account)s at %(bw)s rate",{'queue':queue_num, 'disk':data_file , 'account':account, 'bw': self._needed_BW[index]})
+                #logging.warning("I am running to this queue  %(queue)s for %(disk)s / %(account)s at %(bw)s rate",{'queue':queue_num, 'disk':data_file , 'account':account, 'bw': self._needed_BW[index]})
 
             else:
                 #Create a new thread...
@@ -3456,7 +3480,7 @@ class IOStackThreadPool(object):
                 self._threads.append(thr)
                 queue_num = self.nthreads
                 self.nthreads = self.nthreads + 1 
-                logging.warning("I have created a new queue %(queue)s/%(total)s for %(disk)s / %(account)s at %(bw)s rate",{'queue':queue_num, 'disk':data_file , 'account':account, 'bw': self._needed_BW[index], 'total': self.nthreads})
+                #logging.warning("I have created a new queue %(queue)s/%(total)s for %(disk)s / %(account)s at %(bw)s rate",{'queue':queue_num, 'disk':data_file , 'account':account, 'bw': self._needed_BW[index], 'total': self.nthreads})
   
         disk = None
         #
