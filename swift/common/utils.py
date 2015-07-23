@@ -3237,12 +3237,12 @@ class IOStackThreadPool(object):
 		totalsize = 1
 	return totaltime, totalsize
   
-    def sumesp(self, queue, account, total):
+    def sumesp(self, queue, account, allvalues):
 	total = 0
 	i = 0
 	now = time.time()
 	for value in queue:
-		if self._diskreaders[i][0]._account == account and (total or ((now - self._last_REQ[i]) < 2)):
+		if self._diskreaders[i][0]._account == account and (allvalues or ((now - self._last_REQ[i]) < 2)):
 			total += value
 		i = i + 1
 	return total
