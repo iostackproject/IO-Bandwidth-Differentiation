@@ -3188,7 +3188,7 @@ class IOStackThreadPool(object):
         for i in xrange(self.nthreads):
             if (self._indexworker[i] == -1): continue
             
-            if ((now - self._last_REQ[i]) > 5 and not self._last_REQ[i] == 0): # 10 seconds
+            if ((now - self._last_REQ[i]) > 2 and not self._last_REQ[i] == 0): # 10 seconds
                 #logging.warning("%(i)s Inactive Queue Timeout",{'i':i})
                 self._last_REQ[i] = 0 
               
@@ -3225,20 +3225,24 @@ class IOStackThreadPool(object):
             Updates the BW stats of a stream,
             It should be better to do the div every time we check it.
         """
-        mb , starttime = self._calculate_BW[index]
-        totaltime = time.time() - starttime 
-        totalsize = mb
-        if mb > 0:
-            self._calculated_BW[index] = ( mb / float( time.time() - starttime ) )
+        try:
+		mb , starttime = self._calculate_BW[index]
+        	totaltime = time.time() - starttime 
+        	totalsize = mb
+        	if mb > 0:
+            		self._calculated_BW[index] = ( mb / float( time.time() - starttime ) )
                 #logging.warning("%(index)s %(calculated)s > %(needed)s",{'index':index,'calculated':self._calculated_BW[index],'needed':self._needed_BW[index]})
-        return totaltime, totalsize
+        finally:
+		totaltime = 1
+		totalsize = 1
+	return totaltime, totalsize
   
     def sumesp(self, queue, account, total):
 	total = 0
 	i = 0
 	now = time.time()
 	for value in queue:
-		if self._diskreaders[i][0]._account == account and (total or ((now - self._last_REQ[i]) < 5)):
+		if self._diskreaders[i][0]._account == account and (total or ((now - self._last_REQ[i]) < 2)):
 			total += value
 		i = i + 1
 	return total
