@@ -36,6 +36,7 @@ from swift.common.utils import public, get_logger, \
 from swift.common.bufferedhttp import http_connect
 from swift.common.constraints import check_object_creation, \
     valid_timestamp, check_utf8
+
 from swift.common.exceptions import ConnectionTimeout, DiskFileQuarantined, \
     DiskFileNotExist, DiskFileCollision, DiskFileNoSpace, DiskFileDeleted, \
     DiskFileDeviceUnavailable, DiskFileExpired, ChunkReadTimeout, \
@@ -684,16 +685,14 @@ class ObjectController(BaseStorageServer):
         device, partition, account, container, obj, policy = \
             get_name_and_placement(request, 5, 5, True)
 
-        if get_bwlimit(request) == -1:
-                bwlimit = self.bw_update(account, policy.name, True)
-        else:
-            self.bwlimit[account][policy.name] = get_bwlimit(request)
-            bwlimit = self.bw_update(account, policy.name, True)
-
         keep_cache = self.keep_cache_private or (
             'X-Auth-Token' not in request.headers and
             'X-Storage-Token' not in request.headers)
         try:
+            try:
+                bwlimit = self.bwlimit[account][policy.name]
+            except Exception:
+                bwlimit = -1
             disk_file = self.get_diskfile(
                 device, partition, account, container, obj, bwlimit, 
                 policy=policy)
@@ -893,11 +892,6 @@ class ObjectController(BaseStorageServer):
     def SSYNC(self, request):
         return Response(app_iter=ssync_receiver.Receiver(self, request)())
 
-    def bw_clear(self):
-        for acc in self.bwlimit:
-            for pol in self.bwlimit[acc]:
-                self.bw_update(acc, pol, False)
-
     def _get_osinfo_data(self):
 
             # Submit oid - bw information about the current worker that will be the only one...
@@ -916,7 +910,7 @@ class ObjectController(BaseStorageServer):
                                     for obj in v._diskreaders[int(v2)]:
                                         obje = dict()
                                         obje['oid'] = obj._data_name
-                                        obje['oid_bw'] = obj._limit
+                                        obje['range'] = str(obj._start) + " - " + str(obj._stop)
                                         obje['oid_calculated_BW'] = v._calculated_BW[int(v2)]
                                         content[k][k3]['objects'].append(obje)
                                     try:
@@ -933,48 +927,18 @@ class ObjectController(BaseStorageServer):
                                 for obj in v._diskreaders[int(v2)]:
                                     obje = dict()
                                     obje['oid'] = obj._data_name
-                                    obje['oid_bw'] = obj._limit
+                                    obje['range'] = str(obj._start) + " - " + str(obj._stop)
                                     obje['oid_calculated_BW'] = v._calculated_BW[int(v2)]
                                     item['objects'].append(obje)
                                 item['policy'] = policy.name
                                 try:
                                     item['needed_BW'] = self.bwlimit[item['account']][policy.name]
                                 except Exception:
-                                    self.bw_update(item['account'], policy.name, False)
+                                    self.bwlimit[item['account']][policy.name] = -1
                                     content[k][k3]['needed_BW'] = self.bwlimit[item['account']][policy.name]
                                 content[k][num[k]] = item
                                 num[k]+=1
             return content
-
-    def bw_update(self, acc, pol, get):
-        nobjects = (1 if get else 0)
-        for policy in POLICIES: 
-            if len(self._diskfile_router[policy].threadpools) > 0:
-                for k,v in self._diskfile_router[policy].threadpools.iteritems():
-                    for k2,v2 in v._worker2disk.iteritems():
-                        for obj in v._diskreaders[int(v2)]: 
-                            if obj._account == acc and pol==policy.name:
-                                nobjects += 1
-        if nobjects == 0:
-            if not self.bwlimit[acc]:
-                    self.bwlimit.pop(acc, None)
-            elif pol in self.bwlimit[acc] and self.bwlimit[acc][pol] == -1:
-                self.bwlimit[acc].pop(pol, None)
-                if not self.bwlimit[acc]:
-                    self.bwlimit.pop(acc, None)
-            return None        
-        if not pol in self.bwlimit[acc]:
-            self.bwlimit[acc][pol] = -1
-
-        for policy in POLICIES:
-            if len(self._diskfile_router[policy].threadpools) > 0:
-                for k,v in self._diskfile_router[policy].threadpools.iteritems():
-                    for k2,v2 in v._worker2disk.iteritems():
-                        for idx, obj in enumerate(v._diskreaders[int(v2)]):
-                            if obj._account == acc and pol==policy.name:
-                                v._diskreaders[int(v2)][idx]._limit = self.bwlimit[acc][pol]/nobjects
-
-        return self.bwlimit[acc][pol]/nobjects
     
     def setbw(self, path):
         def is_Int(s):
@@ -992,7 +956,7 @@ class ObjectController(BaseStorageServer):
             bw = (int(r.pop()) if (r and is_Int(r[-1])) else None)
             account = (r.pop(0) if r else None)
             policy = (r.pop(0).replace('%3A', ':') if r else None)
-            if bw:
+            if bw: #save bw into bwdict
                 if not account:
                     return None
                 if policy:
@@ -1000,7 +964,7 @@ class ObjectController(BaseStorageServer):
                 else:
                     for pol in POLICIES:
                         self.bwlimit[account][pol.name] = bw
-            else:
+            else: #delete bw from bwdict
                 if not account and not policy:
                     self.bwlimit = defaultdict(lambda: dict())
                 elif not policy:
@@ -1011,6 +975,14 @@ class ObjectController(BaseStorageServer):
             return None
         return (account, policy, bw)
 
+    def bw_update(self, acc, pol):
+        for policy in POLICIES:
+            if len(self._diskfile_router[policy].threadpools) > 0:
+                for k,v in self._diskfile_router[policy].threadpools.iteritems():
+                    for k2,v2 in v._worker2disk.iteritems():
+                        for idx,obj in enumerate(v._diskreaders[int(v2)]):
+                            if obj._account == acc and pol == policy.name:
+                                v._diskreaders[int(v2)][idx]._limit = self.bwlimit[acc][pol]
 
     def __call__(self, env, start_response):
         """WSGI Application entry point for the Swift Object Server."""
@@ -1019,7 +991,6 @@ class ObjectController(BaseStorageServer):
         self.logger.txn_id = req.headers.get('x-trans-id', None)
 
         if 'osinfo' in req.path:
-            self.bw_clear()
             return HTTPOk(request=req, body = json.dumps(self._get_osinfo_data()), 
                 content_type="application/json")(env, start_response)
         if 'bwmod' in req.path:
@@ -1029,13 +1000,12 @@ class ObjectController(BaseStorageServer):
                 return HTTPBadRequest(request=req)(env, start_response)
             if not policy:
                 for policy in POLICIES:
-                    self.bw_update(account, policy.name, False)
+                    self.bw_update(account, policy.name)
             else:
-                self.bw_update(account, policy, False)
+               self.bw_update(account, policy)
             return HTTPOk(request=req)(env, start_response)
 
         if 'bwdict' in req.path:
-            self.bw_clear()
             return HTTPOk(request=req, body=json.dumps(self.bwlimit), 
                 content_type="application/json")(env, start_response)
         

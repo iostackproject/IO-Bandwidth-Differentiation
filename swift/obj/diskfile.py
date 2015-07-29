@@ -1030,6 +1030,8 @@ class DiskFileReader(object):
             self._keep_cache = False
 
         # Internal Attributes
+        self._start = 0
+        self._stop = "end"
         self._iter_etag = None
         self._bytes_read = 0
         self._started_at_0 = False
@@ -1183,8 +1185,10 @@ class DiskFileReader(object):
         """Returns an iterator over the data file for range (start, stop)"""
         if start or start == 0:
             self._fp.seek(start)
+            self._start = start
         if stop is not None:
             length = stop - start
+            self._stop = stop
         else:
             length = None
         try:

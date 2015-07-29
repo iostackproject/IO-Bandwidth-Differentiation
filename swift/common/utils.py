@@ -3268,21 +3268,18 @@ class IOStackThreadPool(object):
 
             ev, disk, fp, func, args, kwargs = item
 
-           
             #Calculate the attained BW
 	    for i in xrange(self.nthreads):
 		self.update_bw_stats(i)
-            
+
             totaltime, totalsize = self.update_bw_stats(index)
             priority = 0    # Highest priority 
             # If our BW is higher
 	    calc = self.sumesp(self._calculated_BW,self._diskreaders[index][0]._account,False)
-	    need = self.sumesp(self._needed_BW,self._diskreaders[index][0]._account,True)
-
-            if (self._needed_BW[index] == -1) or (calc > need):
+            if (self._needed_BW[index] == -1) or (calc > self._needed_BW[index]):
                 priority = 7
 
-	    if (priority == 0 and calc > need):
+	    if (priority == 0 and calc > self._needed_BW[index]):
 		priority = 7
 		
 
@@ -3317,7 +3314,6 @@ class IOStackThreadPool(object):
             finally:
                 work_queue.task_done()
                 os.write(self.wpipe, u'%05d' % index)  # this byte represents which queue we are working
-
                 
     def _consume_results(self, queue):
         """
