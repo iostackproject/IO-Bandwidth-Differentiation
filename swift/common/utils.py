@@ -3188,7 +3188,7 @@ class IOStackThreadPool(object):
         for i in xrange(self.nthreads):
             if (self._indexworker[i] == -1): continue
             
-            if ((now - self._last_REQ[i]) > 2 and not self._last_REQ[i] == 0): # 10 seconds
+            if ((now - self._last_REQ[i]) > 10 and not self._last_REQ[i] == 0): # 10 seconds
                 #logging.warning("%(i)s Inactive Queue Timeout",{'i':i})
                 self._last_REQ[i] = 0 
               
@@ -3269,8 +3269,8 @@ class IOStackThreadPool(object):
             ev, disk, fp, func, args, kwargs = item
 
             #Calculate the attained BW
-	    for i in xrange(self.nthreads):
-		self.update_bw_stats(i)
+	    #for i in xrange(self.nthreads):
+	#	self.update_bw_stats(i)
 
             totaltime, totalsize = self.update_bw_stats(index)
             priority = 0    # Highest priority 
