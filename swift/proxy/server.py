@@ -401,7 +401,12 @@ class Application(object):
                         content_type="application/json")
 
                 if 'bwmod' in req.path:
-                    return self.bwmod(req)
+                    if 'keystone.identity' in req.environ:
+                        user_roles = req.environ['keystone.identity'].get('roles')
+                        if 'admin' in user_roles:
+                            return self.bwmod(req)
+                    return HTTPForbidden(request=req, body='Authentication with admin'
+                        ' role required to perform "bwmod" operations')
 
                 if 'bwdict' in req.path:
                     return HTTPOk(request=req, body=json.dumps(self.get_bwdict()), 
