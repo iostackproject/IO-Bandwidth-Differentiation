@@ -397,8 +397,13 @@ class Application(object):
 
             try:
                 if 'osinfo' in req.path:
-                    return HTTPOk(request=req, body=json.dumps(self.get_osinfo_data()), 
-                        content_type="application/json")
+                    if 'keystone.identity' in req.environ:
+                        user_roles = req.environ['keystone.identity'].get('roles')
+                        if 'admin' in user_roles:
+                            return HTTPOk(request=req, body=json.dumps(self.get_osinfo_data()),
+                                content_type="application/json")
+                    return HTTPForbidden(request=req, body='Authentication with admin'
+                        ' role required to perform "bw" operations')
 
                 if 'bwmod' in req.path:
                     if 'keystone.identity' in req.environ:
@@ -406,11 +411,16 @@ class Application(object):
                         if 'admin' in user_roles:
                             return self.bwmod(req)
                     return HTTPForbidden(request=req, body='Authentication with admin'
-                        ' role required to perform "bwmod" operations')
+                        ' role required to perform "bw" operations')
 
                 if 'bwdict' in req.path:
-                    return HTTPOk(request=req, body=json.dumps(self.get_bwdict()), 
-                        content_type="application/json")
+                    if 'keystone.identity' in req.environ:
+                        user_roles = req.environ['keystone.identity'].get('roles')
+                        if 'admin' in user_roles:
+                            return HTTPOk(request=req, body=json.dumps(self.get_bwdict()),
+                                content_type="application/json")
+                    return HTTPForbidden(request=req, body='Authentication with admin'
+                        ' role required to perform "bw" operations')
 
                 controller, path_parts = self.get_controller(req)
                 p = req.path_info
