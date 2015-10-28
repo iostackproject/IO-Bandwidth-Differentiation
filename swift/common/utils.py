@@ -3294,8 +3294,9 @@ class IOStackThreadPool(object):
                 if (self._last_Prio[index] != priority):		# Check if needed
                     p = psutil.Process(self._augread.gettid())
                     if (priority == 0):
-                        p.set_ionice(2,0)
-                    else: p.set_ionice(3)
+                        p.ionice(2,0)
+                    else: 
+                        p.ionice(3)
                     self._last_Prio[index] = priority
                 result = func(*args, **kwargs)
                 

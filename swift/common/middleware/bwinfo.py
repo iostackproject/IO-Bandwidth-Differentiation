@@ -16,29 +16,50 @@
 import os, stat, subprocess, shlex, re, sys, time, psutil, pika
 import threading, requests
 from swift import gettext_ as _
-from swift.common.utils import cache_from_env, get_logger, register_swift_info
+from swift.common.utils import cache_from_env, get_logger, register_swift_info, json
 from swift.common.swob import Request, Response
 
+class LCircular(list):
+    def append(self, item):
+        _maxlen = 300 #5 min * 60 sec
+        list.insert(self, 0, item)
+        if len(self) > _maxlen: self[_maxlen:] = []
 
-
-def diskstats_threaded(event, name, BWstats):
-    _waittime = 1
+def diskstats_threaded(event, name, enabled, channel, interval, queue, BWstats):
+    _waittime = 1 #1sec
+    _sendtime = int(interval)
     stats = dict()
+    arr = dict()
+    arrjson = dict()
     devices = psutil.disk_partitions(all=False)
     for d in devices:
+        arr[d.device[:-1]] = LCircular()
         stats[d.device[:-1]] = _getDiskStats(d.device[:-1])
-
+    s = 0
     while True:
+        if enabled and s == _sendtime:
+            for i in arr:
+                disks = dict()
+                disks['insta'] = arr[i][0]
+                disks['1min'] = sum(arr[i][0:60])/60
+                disks['2min'] = sum(arr[i][0:120])/120
+                disks['5min'] = sum(arr[i])/300
+                arrjson[name + i] = disks
+                channel.basic_publish(exchange='', properties=pika.BasicProperties(
+                            content_type='application/json'),routing_key=queue, body=json.dumps(arrjson))
+            s = 0
         if event.wait(_waittime):
             break
         BWdisk = dict()
+        s+=1
         for i in stats:
             read, write = _getDiskStats(i)
             oldread, oldwrite = stats[i]
             stats[i] = (read,write)
             BWdisk[i] = ((read-oldread)/_waittime, (write-oldwrite)/_waittime)
+            arr[i].append((read-oldread)/_waittime + (write-oldwrite)/_waittime)
         BWstats[name] = BWdisk
-        
+
 def bwinfo_threaded(event, name, channel, interval, queue, osip, osport):
     while True:
         if event.wait(int(interval)):
@@ -91,20 +112,28 @@ class BWInfoMiddleware(object):
         if self._monitoring_enabled:
             self.connection = pika.BlockingConnection(pika.ConnectionParameters(self.conf.get('monitoring_ip')))
             self.channel = self.connection.channel()
-            self.channel.queue_declare(queue=self.conf.get('queue'))
+            self.channel.queue_declare(queue=self.conf.get('queue_osinfo'))
+            self.channel.queue_declare(queue=self.conf.get('queue_osstats'))
 
             self.thbw = threading.Thread(target = bwinfo_threaded, name = conf.get('__file__', ''), 
                                         args = (self.event, conf.get('__file__', ''), self.channel, 
-                                            self.conf.get('interval'), self.conf.get('queue'), self.conf.get('bind_ip'),
+                                            self.conf.get('interval_osinfo'), self.conf.get('queue_osinfo'), self.conf.get('bind_ip'),
                                             self.conf.get('bind_port'),))
             self.thbw.start()
             time.sleep(0.1)
+            self.thstats = threading.Thread(target = diskstats_threaded, name = conf.get('__file__', ''), 
+                                        args = (self.event, self.conf.get('bind_ip') + ":" + self.conf.get('bind_port'), self._monitoring_enabled,
+                                            self.channel, self.conf.get('interval_osstats'), self.conf.get('queue_osstats'), self.BWstats,))
+            self.thstats.start()
+            time.sleep(0.1)
 
+        else:
 
-        self.thstats = threading.Thread(target = diskstats_threaded, name = conf.get('__file__', ''), 
-                                        args = (self.event, conf.get('__file__', ''), self.BWstats,))
-        self.thstats.start()
-        time.sleep(0.1)
+            self.thstats = threading.Thread(target = diskstats_threaded, name = conf.get('__file__', ''), 
+                                            args = (self.event, self.conf.get('bind_ip') + ":" + self.conf.get('bind_port'), self._monitoring_enabled,
+                                                None, self.conf.get('interval_osstats'), None, self.BWstats,))
+            self.thstats.start()
+            time.sleep(0.1)
         
 
     def __del__(self):
@@ -146,7 +175,7 @@ class BWInfoMiddleware(object):
         """
 
         osdev = self.get_mount_point(self.conf.get('devices'))
-        BWList = self.BWstats[self.conf.get('__file__', '')]
+        BWList = self.BWstats[self.conf.get('bind_ip') + ":" + self.conf.get('bind_port')]
         timing = ""
         try:
             for element in BWList:
