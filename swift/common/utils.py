@@ -3296,8 +3296,8 @@ class IOStackThreadPool(object):
                     if (priority == 0):
                         p.ionice(psutil.IOPRIO_CLASS_BE,0)
                     else: 
-                        p.ionice(psutil.IOPRIO_CLASS_IDLE)
-                        #p.ionice(psutil.IOPRIO_CLASS_BE, 7)
+                        #p.ionice(psutil.IOPRIO_CLASS_IDLE)
+                        p.ionice(psutil.IOPRIO_CLASS_BE, 4)
                     self._last_Prio[index] = priority
                 result = func(*args, **kwargs)
                 
