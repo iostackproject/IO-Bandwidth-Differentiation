@@ -37,17 +37,24 @@ def diskstats_threaded(event, name, enabled, channel, interval, queue, BWstats):
         stats[d.device[:-1]] = _getDiskStats(d.device[:-1])
     s = 0
     while True:
-        if enabled and s == _sendtime:
+        if s>0:
             for i in arr:
                 disks = dict()
                 disks['insta'] = arr[i][0]
-                disks['1min'] = sum(arr[i][0:60])/60
-                disks['2min'] = sum(arr[i][0:120])/120
-                disks['5min'] = sum(arr[i])/300
+                disks['max-1min'] = max(arr[i][0:60])
+                disks['max-2min'] = max(arr[i][0:120])
+                disks['max-5min'] = max(arr[i])
+                disks['min-1min'] = min(arr[i][0:60])
+                disks['min-2min'] = min(arr[i][0:120])
+                disks['min-5min'] = min(arr[i])
+                disks['mean-1min'] = sum(arr[i][0:60])/60
+                disks['mean-2min'] = sum(arr[i][0:120])/120
+                disks['mean-5min'] = sum(arr[i])/300
                 arrjson[name + i] = disks
-                channel.basic_publish(exchange='', properties=pika.BasicProperties(
-                            content_type='application/json'),routing_key=queue, body=json.dumps(arrjson))
-            s = 0
+                if enabled and s == _sendtime:
+                    channel.basic_publish(exchange='', properties=pika.BasicProperties(
+                                    content_type='application/json'),routing_key=queue, body=json.dumps(arrjson))
+                    s = 0
         if event.wait(_waittime):
             break
         BWdisk = dict()
@@ -56,9 +63,8 @@ def diskstats_threaded(event, name, enabled, channel, interval, queue, BWstats):
             read, write = _getDiskStats(i)
             oldread, oldwrite = stats[i]
             stats[i] = (read,write)
-            BWdisk[i] = ((read-oldread)/_waittime, (write-oldwrite)/_waittime)
             arr[i].append((read-oldread)/_waittime + (write-oldwrite)/_waittime)
-        BWstats[name] = BWdisk
+        BWstats[name] = arrjson
 
 def bwinfo_threaded(event, name, channel, interval, queue, osip, osport):
     while True:
@@ -175,16 +181,8 @@ class BWInfoMiddleware(object):
         """
 
         osdev = self.get_mount_point(self.conf.get('devices'))
-        BWList = self.BWstats[self.conf.get('bind_ip') + ":" + self.conf.get('bind_port')]
-        timing = ""
-        try:
-            for element in BWList:
-                read,write = BWList[element]
-                if osdev[:-1] == element:
-                    timing = str(float(read)+float(write))
-        except Exception as err:
-            pass
-        return Response(request=req, body=timing, content_type="text/plain")
+        Bwstatsos = self.BWstats[self.conf.get('bind_ip') + ":" + self.conf.get('bind_port')]
+        return Response(request=req, body=json.dumps(Bwstatsos), content_type="application/json")
 
     def DISABLED(self, req):
         """Returns a 503 response with "DISABLED BY FILE" in the body."""
