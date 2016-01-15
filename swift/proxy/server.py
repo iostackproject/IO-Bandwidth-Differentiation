@@ -22,6 +22,7 @@ from time import time
 import itertools
 import functools
 import sys
+import redis
 
 from eventlet import Timeout
 
@@ -148,6 +149,8 @@ class Application(object):
         self.node_timings = {}
         self.timing_expiry = int(conf.get('timing_expiry', 300))
         self.sorting_method = conf.get('sorting_method', 'shuffle').lower()
+        self.redis_host = conf.get('redis_host', '127.0.0.1').lower()
+        self.redis_port = conf.get('redis_port', 6379)
         self.max_large_object_get_time = float(
             conf.get('max_large_object_get_time', '86400'))
         value = conf.get('request_node_count', '2 * replicas').lower().split()
@@ -313,6 +316,11 @@ class Application(object):
 
 
     def get_bwdict(self):
+        """
+        Gets all the bw assignations stored in the Object-servers.
+
+        returns: json with the bw assignations.
+        """
         nodes = POLICIES.default.object_ring.devs
         dict_json = dict()
         for node in nodes:
@@ -328,7 +336,60 @@ class Application(object):
                 dict_json[nodeid] = "Error with Object Server"
         return dict_json
 
+    def get_bw_fields(self, path):
+        """
+        Extracts the account, policy and bw assignation from the 
+        request path.
+
+        returns: account, policy, bw
+        """
+        def is_Int(s):
+            try:
+                int(s)
+                return (True if int(s) > 0 else False)
+            except ValueError:
+                return False
+
+        r = filter(bool, path.split('/'))
+        method = r.pop(0) #bwmod
+        if len(r) > 3:
+            return None
+        try:
+            bw = (int(r.pop()) if (r and is_Int(r[-1])) else None)
+            account = (r.pop(0) if r else None)
+            policy = (r.pop(0).replace('%3A', ':') if r else None)
+        except Exception:
+            return None
+        return (account, policy, bw)
+
+    def set_redis_bw(self, account, policy, bw):
+        """
+        Sends the bw assignation to the redis database.
+        To change the redis host and port set it into the proxy-server.conf file.
+        """
+        try:
+            r = redis.Redis(connection_pool=redis.ConnectionPool(host=self.redis_host, port=self.redis_port, db=0))
+        except:
+            return Response('Error connecting with DB', status=500)
+        if not account:
+            keys = r.keys("bw:*")
+            for key in keys:
+                r.delete(key)
+        elif not policy and not bw:
+            r.delete('bw:'+account)
+        elif not policy:
+            for pol in POLICIES:
+                r.hset('bw:'+account, pol.name, bw)
+        elif not bw:
+            r.hdel('bw:'+account, policy)
+        else:
+            r.hset('bw:'+account, policy, bw)
+
     def bwmod(self, req):
+        """
+        Sends the bw assignation to all the Object-servers and it calls
+        the set_redis_bw function.
+        """
         nodes = POLICIES.default.object_ring.devs
         for node in nodes:
             try:
@@ -340,6 +401,8 @@ class Application(object):
                 res = HTTPOk(request=req, body=resp.read())
             except Exception:
                 pass
+        account, policy, bw = self.get_bw_fields(req.path)
+        self.set_redis_bw(account, policy, bw)
         return res
 
 
@@ -366,6 +429,9 @@ class Application(object):
             return ['Internal server error.\n']
 
     def update_request(self, req):
+        """
+        Checks for headers compatibility problems.
+        """
         if 'x-storage-token' in req.headers and \
                 'x-auth-token' not in req.headers:
             req.headers['x-auth-token'] = req.headers['x-storage-token']
