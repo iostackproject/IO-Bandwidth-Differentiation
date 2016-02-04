@@ -434,7 +434,7 @@ class Application(object):
                 pol = POLICIES.get_by_index(c_info['storage_policy'])
                 policy_name = pol.name
             except KeyError:
-                policy_name = 'Unknown'
+                policy_name = '/'
             bw = bwdict[policy_name]
             os = self.get_osinfo_data()
             nodes_used = []
@@ -444,22 +444,20 @@ class Application(object):
                         if os[node][dev][thread]['account'] == account \
                         and os[node][dev][thread]['policy'] == policy_name:
                             nodes_used.append(node)
-            self.logger.warning(_("Marc %s"),nodes_used)
+            self.logger.warning(_("Marc %s %s"),len(nodes_used), nodes_used)
             if len(nodes_used) > 0:
                 req_path = "/bwmod/" + account +'/' + policy_name + '/' + str(int(bw)/len(nodes_used)) +'/'
-            else:
-                req_path = "/bwmod/" + account +'/' + policy_name + '/' + bw +'/'
-            for node in nodes_used:
-                try:
-                    self.logger.warning(_("Marc %s %s %s"),node[:-5],node[-5:],req_path)
-                    conn = http_connect(node[:-5], node[-4:], req_path, "",
-                                   'GET', "", headers="")
-                    resp = conn.getresponse()
-                    if not is_success(resp.status):
-                        return Response(request=req, status=resp.status)
-                    res = HTTPOk(request=req, body=resp.read())
-                except Exception:
-                    pass
+                for node in nodes_used:
+                    try:
+                        self.logger.warning(_("Marc %s %s %s"),node[:-5],node[-5:],req_path)
+                        conn = http_connect(node[:-5], node[-4:], req_path, "",
+                                       'GET', "", headers="")
+                        resp = conn.getresponse()
+                        if not is_success(resp.status):
+                            return Response(request=req, status=resp.status)
+                        res = HTTPOk(request=req, body=resp.read())
+                    except Exception:
+                        pass
 
     def __call__(self, env, start_response):
         """
