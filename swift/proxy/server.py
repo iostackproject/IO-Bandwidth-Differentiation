@@ -362,6 +362,20 @@ class Application(object):
             return None
         return (account, policy, bw)
 
+    def get_redis_bw(self):
+        """
+        Gets the bw assignation from the redis database
+        """
+        bw = dict()
+        try:
+            r = redis.Redis(connection_pool=redis.ConnectionPool(host=self.redis_host, port=self.redis_port, db=0))
+        except:
+            return Response('Error connecting with DB', status=500)
+        keys = r.keys("bw:*")
+        for key in keys:
+            bw[key[3:]] = r.hgetall(key)
+        return bw
+
     def set_redis_bw(self, account, policy, bw):
         """
         Sends the bw assignation to the redis database.
@@ -384,6 +398,7 @@ class Application(object):
             r.hdel('bw:'+account, policy)
         else:
             r.hset('bw:'+account, policy, bw)
+        return HTTPOk()
 
     def bwmod(self, req):
         """
@@ -402,9 +417,47 @@ class Application(object):
             except Exception:
                 pass
         account, policy, bw = self.get_bw_fields(req.path)
-        self.set_redis_bw(account, policy, bw)
+        res = self.set_redis_bw(account, policy, bw)
         return res
 
+    def assign_bw(self, controller):
+        account = controller.account_name
+        container = controller.container_name
+        try:
+            r = redis.Redis(connection_pool=redis.ConnectionPool(host=self.redis_host, port=self.redis_port, db=0))
+        except:
+            return Response('Error connecting with DB', status=500)
+        bwdict = r.hgetall('bw:'+account)
+        if bwdict:
+            c_info =controller.container_info(account, container)
+            try:
+                pol = POLICIES.get_by_index(c_info['storage_policy'])
+                policy_name = pol.name
+            except KeyError:
+                policy_name = '/'
+            bw = bwdict[policy_name]
+            os = self.get_osinfo_data()
+            nodes_used = []
+            for node in os:
+                for dev in os[node]:
+                    for thread in os[node][dev]:
+                        if os[node][dev][thread]['account'] == account \
+                        and os[node][dev][thread]['policy'] == policy_name:
+                            nodes_used.append(node)
+            self.logger.warning(_("Marc %s %s"),len(nodes_used), nodes_used)
+            if len(nodes_used) > 0:
+                req_path = "/bwmod/" + account +'/' + policy_name + '/' + str(int(bw)/len(nodes_used)) +'/'
+                for node in nodes_used:
+                    try:
+                        self.logger.warning(_("Marc %s %s %s"),node[:-5],node[-5:],req_path)
+                        conn = http_connect(node[:-5], node[-4:], req_path, "",
+                                       'GET', "", headers="")
+                        resp = conn.getresponse()
+                        if not is_success(resp.status):
+                            return Response(request=req, status=resp.status)
+                        res = HTTPOk(request=req, body=resp.read())
+                    except Exception:
+                        pass
 
     def __call__(self, env, start_response):
         """
@@ -547,6 +600,8 @@ class Application(object):
             # gets mutated during handling.  This way logging can display the
             # method the client actually sent.
             req.environ['swift.orig_req_method'] = req.method
+            if hasattr(controller, 'object_name'):
+                self.assign_bw(controller)
             return handler(req)
         except HTTPException as error_response:
             return error_response
