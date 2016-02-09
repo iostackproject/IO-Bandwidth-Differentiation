@@ -23,6 +23,8 @@ import itertools
 import functools
 import sys
 import redis
+import threading
+from collections import defaultdict
 
 from eventlet import Timeout
 
@@ -151,6 +153,13 @@ class Application(object):
         self.sorting_method = conf.get('sorting_method', 'shuffle').lower()
         self.redis_host = conf.get('redis_host', '127.0.0.1').lower()
         self.redis_port = conf.get('redis_port', 6379)
+
+        #auto bw assign thread
+        self.th_stop = threading.Event()
+        self.th_bwassign = threading.Thread(target = self.bw_assign_threaded, name = "bw_assign_threaded", 
+                                        args = (self.th_stop, "bw_assign_threaded"))
+        self.th_bwassign.start()
+
         self.max_large_object_get_time = float(
             conf.get('max_large_object_get_time', '86400'))
         value = conf.get('request_node_count', '2 * replicas').lower().split()
@@ -227,6 +236,30 @@ class Application(object):
             allow_account_management=self.allow_account_management,
             account_autocreate=self.account_autocreate,
             **constraints.EFFECTIVE_CONSTRAINTS)
+
+    def bw_assign_threaded(self, event, name):
+        _interval = 5
+        while (not event.is_set()):
+            count = dict()
+            osinfo = self.get_osinfo_data()
+            bw = self.get_redis_bw()
+            for os in osinfo:
+                for dev in osinfo[os]:
+                    for th in osinfo[os][dev]:
+                        if not osinfo[os][dev][th]["account"] in count:
+                            count[osinfo[os][dev][th]["account"]] = defaultdict(int)
+                        count[osinfo[os][dev][th]["account"]][osinfo[os][dev][th]["policy"]] += 1
+
+            for account in count:
+                if account in bw:
+                    for policy in count[account]:
+                        if policy in bw[account]:
+                            newbw = int(bw[account][policy])/int(count[account][policy])
+                            path = "/bwmod/" + account + "/" + policy + "/" + str(newbw)
+                            self.logger.warning(_("Marc %s"), path)
+                            self.bwmod(path=path)
+            event.wait(int(_interval))
+
 
     def check_config(self):
         """
@@ -400,7 +433,7 @@ class Application(object):
             r.hset('bw:'+account, policy, bw)
         return HTTPOk()
 
-    def bwmod(self, req):
+    def bwmod(self, req=None, path=None):
         """
         Sends the bw assignation to all the Object-servers and it calls
         the set_redis_bw function.
@@ -408,56 +441,20 @@ class Application(object):
         nodes = POLICIES.default.object_ring.devs
         for node in nodes:
             try:
-                conn = http_connect(node['ip'], node['port'], req.path[1:].replace('%3A', ':'), "",
-                                'GET', "", headers="")
+                if not path:
+                    conn = http_connect(node['ip'], node['port'], req.path[1:].replace('%3A', ':'), "",
+                                    'GET', "", headers="")
+                else:
+                    conn = http_connect(node['ip'], node['port'], path, "",
+                                    'GET', "", headers="")
                 resp = conn.getresponse()
                 if not is_success(resp.status):
-                    return Response(request=req, status=resp.status)
-                res = HTTPOk(request=req, body=resp.read())
+                    return Response(status=resp.status)
+                res = HTTPOk(body=resp.read())
             except Exception:
                 pass
-        account, policy, bw = self.get_bw_fields(req.path)
-        res = self.set_redis_bw(account, policy, bw)
+        
         return res
-
-    def assign_bw(self, controller):
-        account = controller.account_name
-        container = controller.container_name
-        try:
-            r = redis.Redis(connection_pool=redis.ConnectionPool(host=self.redis_host, port=self.redis_port, db=0))
-        except:
-            return Response('Error connecting with DB', status=500)
-        bwdict = r.hgetall('bw:'+account)
-        if bwdict:
-            c_info =controller.container_info(account, container)
-            try:
-                pol = POLICIES.get_by_index(c_info['storage_policy'])
-                policy_name = pol.name
-            except KeyError:
-                policy_name = '/'
-            bw = bwdict[policy_name]
-            os = self.get_osinfo_data()
-            nodes_used = []
-            for node in os:
-                for dev in os[node]:
-                    for thread in os[node][dev]:
-                        if os[node][dev][thread]['account'] == account \
-                        and os[node][dev][thread]['policy'] == policy_name:
-                            nodes_used.append(node)
-            self.logger.warning(_("Marc %s %s"),len(nodes_used), nodes_used)
-            if len(nodes_used) > 0:
-                req_path = "/bwmod/" + account +'/' + policy_name + '/' + str(int(bw)/len(nodes_used)) +'/'
-                for node in nodes_used:
-                    try:
-                        self.logger.warning(_("Marc %s %s %s"),node[:-5],node[-5:],req_path)
-                        conn = http_connect(node[:-5], node[-4:], req_path, "",
-                                       'GET', "", headers="")
-                        resp = conn.getresponse()
-                        if not is_success(resp.status):
-                            return Response(request=req, status=resp.status)
-                        res = HTTPOk(request=req, body=resp.read())
-                    except Exception:
-                        pass
 
     def __call__(self, env, start_response):
         """
@@ -528,6 +525,8 @@ class Application(object):
                     if 'keystone.identity' in req.environ:
                         user_roles = req.environ['keystone.identity'].get('roles')
                         if 'admin' in user_roles:
+                            account, policy, bw = self.get_bw_fields(req.path)
+                            self.set_redis_bw(account, policy, bw)
                             return self.bwmod(req)
                     return HTTPForbidden(request=req, body='Authentication with admin'
                         ' role required to perform "bw" operations')
@@ -600,8 +599,6 @@ class Application(object):
             # gets mutated during handling.  This way logging can display the
             # method the client actually sent.
             req.environ['swift.orig_req_method'] = req.method
-            if hasattr(controller, 'object_name'):
-                self.assign_bw(controller)
             return handler(req)
         except HTTPException as error_response:
             return error_response
