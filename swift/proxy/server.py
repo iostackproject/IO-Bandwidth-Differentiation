@@ -24,6 +24,7 @@ import functools
 import sys
 import redis
 import threading
+import signal
 from collections import defaultdict
 
 from eventlet import Timeout
@@ -157,8 +158,9 @@ class Application(object):
         #auto bw assign thread
         self.th_stop = threading.Event()
         self.th_bwassign = threading.Thread(target = self.bw_assign_threaded, name = "bw_assign_threaded", 
-                                        args = (self.th_stop, "bw_assign_threaded"))
+                                        args = (self.th_stop,))
         self.th_bwassign.start()
+        signal.signal(signal.SIGTERM, self.sigterm_handler)
 
         self.max_large_object_get_time = float(
             conf.get('max_large_object_get_time', '86400'))
@@ -237,28 +239,34 @@ class Application(object):
             account_autocreate=self.account_autocreate,
             **constraints.EFFECTIVE_CONSTRAINTS)
 
-    def bw_assign_threaded(self, event, name):
-        _interval = 5
-        while (not event.is_set()):
-            count = dict()
-            osinfo = self.get_osinfo_data()
-            bw = self.get_redis_bw()
-            for os in osinfo:
-                for dev in osinfo[os]:
-                    for th in osinfo[os][dev]:
-                        if not osinfo[os][dev][th]["account"] in count:
-                            count[osinfo[os][dev][th]["account"]] = defaultdict(int)
-                        count[osinfo[os][dev][th]["account"]][osinfo[os][dev][th]["policy"]] += 1
+    def sigterm_handler(self, signum, frame):
+        self.th_stop.set()
+        self.th_bwassign.join()
 
-            for account in count:
-                if account in bw:
-                    for policy in count[account]:
-                        if policy in bw[account]:
-                            newbw = int(bw[account][policy])/int(count[account][policy])
-                            path = "/bwmod/" + account + "/" + policy + "/" + str(newbw)
-                            self.logger.warning(_("Marc %s"), path)
-                            self.bwmod(path=path)
-            event.wait(int(_interval))
+    def bw_assign_threaded(self, event):
+        """
+        Auto assigns bandwidth per object-server, tenant and policy.
+        """
+        _interval = 5
+        while event.wait(int(_interval)):
+                count = dict()
+                osinfo = self.get_osinfo_data()
+                bw = self.get_redis_bw()
+                for os in osinfo:
+                    if osinfo[os] != "Error with Object Server":
+                        for dev in osinfo[os]:
+                            for th in osinfo[os][dev]:
+                                if not osinfo[os][dev][th]["account"] in count:
+                                    count[osinfo[os][dev][th]["account"]] = defaultdict(int)
+                                count[osinfo[os][dev][th]["account"]][osinfo[os][dev][th]["policy"]] += 1
+
+                for account in count:
+                    if account in bw:
+                        for policy in count[account]:
+                            if policy in bw[account]:
+                                newbw = int(bw[account][policy])/int(count[account][policy])
+                                path = "/bwmod/" + account + "/" + policy + "/" + str(newbw)
+                                self.bwmod(path=path)
 
 
     def check_config(self):
