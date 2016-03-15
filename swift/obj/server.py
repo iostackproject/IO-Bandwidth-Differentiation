@@ -695,6 +695,7 @@ class ObjectController(BaseStorageServer):
             'X-Storage-Token' not in request.headers)
         try:
             bwlimit = self.get_last_bw_redis(account, policy.name)
+            self.bwlimit[account][policy.name] = bwlimit
         except Exception:
             bwlimit = -1
         try:
@@ -744,7 +745,7 @@ class ObjectController(BaseStorageServer):
                 headers['X-Backend-Timestamp'] = e.timestamp.internal
             resp = HTTPNotFound(request=request, headers=headers,
                                 conditional_response=True)
-            self.bw_update(account, policy.name, False)
+            self.bw_update(account, policy.name)
         return resp
 
     @public
