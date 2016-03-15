@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os, stat, subprocess, shlex, re, sys, time, psutil, pika
+import os, stat, subprocess, shlex, re, sys, time, psutil, pika, json
 import threading, requests
 from swift import gettext_ as _
+from swift.common.direct_client import http_connect
 from swift.common.utils import cache_from_env, get_logger, register_swift_info, json
 from swift.common.swob import Request, Response
 
@@ -110,6 +111,8 @@ class BWInfoMiddleware(object):
         self.logger = logger or get_logger(conf, log_route='bwlimit')
         self.event = threading.Event()
         self.BWstats = dict()
+        self.ip = self.conf.get('bind_ip') + ':' + self.conf.get('bind_port')
+        self.routing_key = "#." +  self.ip.replace('.','-').replace(':','-')  + ".#"
         try:
             self._monitoring_enabled = self.str2bool(self.conf.get('enabled'))
         except Exception:
@@ -120,6 +123,14 @@ class BWInfoMiddleware(object):
             self.channel = self.connection.channel()
             self.channel.queue_declare(queue=self.conf.get('queue_osinfo'))
             self.channel.queue_declare(queue=self.conf.get('queue_osstats'))
+            self.queue_bw = 'bw_assignations:'+ self.ip
+            self.channel.queue_declare(queue=self.queue_bw)
+            self.channel.exchange_declare(exchange='bw_assignations', type='topic')
+            self.channel.queue_bind(exchange='bw_assignations', queue=self.queue_bw, routing_key=self.routing_key)
+
+            self.consumer = self.channel.basic_consume(self.bw_assignations, queue=self.queue_bw, no_ack=True)
+            self.thassignations = threading.Thread(target=self.channel.start_consuming)
+            self.thassignations.start()
 
             self.thbw = threading.Thread(target = bwinfo_threaded, name = conf.get('__file__', ''), 
                                         args = (self.event, conf.get('__file__', ''), self.channel, 
@@ -133,22 +144,24 @@ class BWInfoMiddleware(object):
             self.thstats.start()
             time.sleep(0.1)
 
-        else:
+    def bw_assignations(self, ch, method, properties, body):
+        for address in body.split():
+            if address.startswith(self.ip):
+                conn = http_connect(self.conf.get('bind_ip'), self.conf.get('bind_port'),'bwmod'+address, "",
+                                        'GET', "", headers="")
+                resp = conn.getresponse()
 
-            self.thstats = threading.Thread(target = diskstats_threaded, name = conf.get('__file__', ''), 
-                                            args = (self.event, self.conf.get('bind_ip') + ":" + self.conf.get('bind_port'), self._monitoring_enabled,
-                                                None, self.conf.get('interval_osstats'), None, self.BWstats,))
-            self.thstats.start()
-            time.sleep(0.1)
-        
 
     def __del__(self):
         try:
             self.event.set()
             if self._monitoring_enabled:
+                self.channel.stop_consuming()
+                self.channel.close()
+                self.thassignations.join
                 self.thbw.join()
                 self.connection.close()
-            self.thstats.join()
+                self.thstats.join()
             
         except RuntimeError as err:
             pass

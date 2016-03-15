@@ -18,6 +18,7 @@
 import cPickle as pickle
 import json
 import os
+import redis
 import multiprocessing
 import time
 import traceback
@@ -109,8 +110,12 @@ class ObjectController(BaseStorageServer):
         /etc/swift/object-server.conf-sample.
         """
         super(ObjectController, self).__init__(conf)
+        self.bind_ip = conf.get('bind_ip')
+        self.bind_port = conf.get('bind_port')
         self.logger = logger or get_logger(conf, log_route='object-server')
         self.bwlimit = defaultdict(lambda: dict())
+        self.redis_host = conf.get('redis_host', '127.0.0.1').lower()
+        self.redis_port = conf.get('redis_port', 6379)
         self.node_timeout = int(conf.get('node_timeout', 3))
         self.conn_timeout = float(conf.get('conn_timeout', 0.5))
         self.client_timeout = int(conf.get('client_timeout', 60))
@@ -689,10 +694,10 @@ class ObjectController(BaseStorageServer):
             'X-Auth-Token' not in request.headers and
             'X-Storage-Token' not in request.headers)
         try:
-            try:
-                bwlimit = self.bwlimit[account][policy.name]
-            except Exception:
-                bwlimit = -1
+            bwlimit = self.get_last_bw_redis(account, policy.name)
+        except Exception:
+            bwlimit = -1
+        try:
             disk_file = self.get_diskfile(
                 device, partition, account, container, obj, bwlimit, 
                 policy=policy)
@@ -897,6 +902,7 @@ class ObjectController(BaseStorageServer):
             # Submit oid - bw information about the current worker that will be the only one...
             content = defaultdict(lambda: dict())
             num = defaultdict(lambda: 0)
+            ip = self.bind_ip + ":" + self.bind_port
             for policy in POLICIES:
                 if len(self._diskfile_router[policy].threadpools) > 0:
                     for k,v in self._diskfile_router[policy].threadpools.iteritems():
@@ -916,7 +922,7 @@ class ObjectController(BaseStorageServer):
                                     try:
                                         content[k][k3]['needed_BW'] = self.bwlimit[content[k][k3]['account']][policy.name]
                                     except Exception:
-                                        self.bw_update(content[k][k3]['account'], policy.name, False)
+                                        self.bw_update(content[k][k3]['account'], policy.get_name_and_placement)
                                         content[k][k3]['needed_BW'] = self.bwlimit[content[k][k3]['account']][policy.name]
                                     new = False
                             if new:
@@ -938,7 +944,9 @@ class ObjectController(BaseStorageServer):
                                     content[k][k3]['needed_BW'] = self.bwlimit[item['account']][policy.name]
                                 content[k][num[k]] = item
                                 num[k]+=1
-            return content
+            data = dict()
+            data[ip] = content
+            return data
     
     def setbw(self, path):
         def is_Int(s):
@@ -983,6 +991,19 @@ class ObjectController(BaseStorageServer):
                         for idx,obj in enumerate(v._diskreaders[int(v2)]):
                             if obj._account == acc and pol == policy.name:
                                 v._diskreaders[int(v2)][idx]._limit = self.bwlimit[acc][pol]
+
+
+    def get_last_bw_redis(self, acc, pol):
+        try:
+            r = redis.Redis(connection_pool=redis.ConnectionPool(host=self.redis_host, port=self.redis_port, db=0))
+        except:
+            return JSONResponse('Error connecting with DB', status=500)
+        key = "last_bw:" + acc
+        bw = r.hgetall(key)
+        bw_key = self.bind_ip + ":" + self.bind_port + "-" + pol
+        return bw[bw_key]
+
+
 
     def __call__(self, env, start_response):
         """WSGI Application entry point for the Swift Object Server."""

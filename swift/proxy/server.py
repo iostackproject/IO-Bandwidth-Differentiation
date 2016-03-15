@@ -26,7 +26,7 @@ import redis
 import threading
 import signal
 from collections import defaultdict
-
+from urlparse import urlparse
 from eventlet import Timeout
 
 from swift import __canonical_version__ as swift_version
@@ -154,14 +154,6 @@ class Application(object):
         self.sorting_method = conf.get('sorting_method', 'shuffle').lower()
         self.redis_host = conf.get('redis_host', '127.0.0.1').lower()
         self.redis_port = conf.get('redis_port', 6379)
-
-        #auto bw assign thread
-        self.th_stop = threading.Event()
-        self.th_bwassign = threading.Thread(target = self.bw_assign_threaded, name = "bw_assign_threaded", 
-                                        args = (self.th_stop,))
-        self.th_bwassign.start()
-        signal.signal(signal.SIGTERM, self.sigterm_handler)
-
         self.max_large_object_get_time = float(
             conf.get('max_large_object_get_time', '86400'))
         value = conf.get('request_node_count', '2 * replicas').lower().split()
@@ -238,36 +230,6 @@ class Application(object):
             allow_account_management=self.allow_account_management,
             account_autocreate=self.account_autocreate,
             **constraints.EFFECTIVE_CONSTRAINTS)
-
-    def sigterm_handler(self, signum, frame):
-        self.th_stop.set()
-        self.th_bwassign.join()
-
-    def bw_assign_threaded(self, event):
-        """
-        Auto assigns bandwidth per object-server, tenant and policy.
-        """
-        _interval = 5
-        while event.wait(int(_interval)):
-                count = dict()
-                osinfo = self.get_osinfo_data()
-                bw = self.get_redis_bw()
-                for os in osinfo:
-                    if osinfo[os] != "Error with Object Server":
-                        for dev in osinfo[os]:
-                            for th in osinfo[os][dev]:
-                                if not osinfo[os][dev][th]["account"] in count:
-                                    count[osinfo[os][dev][th]["account"]] = defaultdict(int)
-                                count[osinfo[os][dev][th]["account"]][osinfo[os][dev][th]["policy"]] += 1
-
-                for account in count:
-                    if account in bw:
-                        for policy in count[account]:
-                            if policy in bw[account]:
-                                newbw = int(bw[account][policy])/int(count[account][policy])
-                                path = "/bwmod/" + account + "/" + policy + "/" + str(newbw)
-                                self.bwmod(path=path)
-
 
     def check_config(self):
         """
@@ -349,7 +311,7 @@ class Application(object):
                 resp = conn.getresponse()
                 if is_success(resp.status):
                     nodeid = node['ip'] + ':' + str(node['port'])
-                    osinfo_json[nodeid] = json.loads(resp.read())
+                    osinfo_json.update(json.loads(resp.read()))
             except Exception:
                 nodeid = node['ip'] + ':' + str(node['port'])
                 osinfo_json[nodeid] = "Error with Object Server"
@@ -376,93 +338,6 @@ class Application(object):
                 nodeid = node['ip'] + ':' + str(node['port'])
                 dict_json[nodeid] = "Error with Object Server"
         return dict_json
-
-    def get_bw_fields(self, path):
-        """
-        Extracts the account, policy and bw assignation from the 
-        request path.
-
-        returns: account, policy, bw
-        """
-        def is_Int(s):
-            try:
-                int(s)
-                return (True if int(s) > 0 else False)
-            except ValueError:
-                return False
-
-        r = filter(bool, path.split('/'))
-        method = r.pop(0) #bwmod
-        if len(r) > 3:
-            return None
-        try:
-            bw = (int(r.pop()) if (r and is_Int(r[-1])) else None)
-            account = (r.pop(0) if r else None)
-            policy = (r.pop(0).replace('%3A', ':') if r else None)
-        except Exception:
-            return None
-        return (account, policy, bw)
-
-    def get_redis_bw(self):
-        """
-        Gets the bw assignation from the redis database
-        """
-        bw = dict()
-        try:
-            r = redis.Redis(connection_pool=redis.ConnectionPool(host=self.redis_host, port=self.redis_port, db=0))
-        except:
-            return Response('Error connecting with DB', status=500)
-        keys = r.keys("bw:*")
-        for key in keys:
-            bw[key[3:]] = r.hgetall(key)
-        return bw
-
-    def set_redis_bw(self, account, policy, bw):
-        """
-        Sends the bw assignation to the redis database.
-        To change the redis host and port set it into the proxy-server.conf file.
-        """
-        try:
-            r = redis.Redis(connection_pool=redis.ConnectionPool(host=self.redis_host, port=self.redis_port, db=0))
-        except:
-            return Response('Error connecting with DB', status=500)
-        if not account:
-            keys = r.keys("bw:*")
-            for key in keys:
-                r.delete(key)
-        elif not policy and not bw:
-            r.delete('bw:'+account)
-        elif not policy:
-            for pol in POLICIES:
-                r.hset('bw:'+account, pol.name, bw)
-        elif not bw:
-            r.hdel('bw:'+account, policy)
-        else:
-            r.hset('bw:'+account, policy, bw)
-        return HTTPOk()
-
-    def bwmod(self, req=None, path=None):
-        """
-        Sends the bw assignation to all the Object-servers and it calls
-        the set_redis_bw function.
-        """
-        nodes = POLICIES.default.object_ring.devs
-        for node in nodes:
-            try:
-                if not path:
-                    conn = http_connect(node['ip'], node['port'], req.path[1:].replace('%3A', ':'), "",
-                                    'GET', "", headers="")
-                else:
-                    conn = http_connect(node['ip'], node['port'], path, "",
-                                    'GET', "", headers="")
-                resp = conn.getresponse()
-                if not is_success(resp.status):
-                    return Response(status=resp.status)
-                res = HTTPOk(body=resp.read())
-            except Exception:
-                pass
-        
-        return res
 
     def __call__(self, env, start_response):
         """
@@ -526,16 +401,6 @@ class Application(object):
                         if 'admin' in user_roles:
                             return HTTPOk(request=req, body=json.dumps(self.get_osinfo_data()),
                                 content_type="application/json")
-                    return HTTPForbidden(request=req, body='Authentication with admin'
-                        ' role required to perform "bw" operations')
-
-                if 'bwmod' in req.path:
-                    if 'keystone.identity' in req.environ:
-                        user_roles = req.environ['keystone.identity'].get('roles')
-                        if 'admin' in user_roles:
-                            account, policy, bw = self.get_bw_fields(req.path)
-                            self.set_redis_bw(account, policy, bw)
-                            return self.bwmod(req)
                     return HTTPForbidden(request=req, body='Authentication with admin'
                         ' role required to perform "bw" operations')
 
