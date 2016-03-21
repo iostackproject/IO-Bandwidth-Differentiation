@@ -296,49 +296,6 @@ class Application(object):
             return AccountController, d
         return None, d
 
-    def get_osinfo_data(self):
-        """
-        Gets the osinfo data from all the available OS.
-
-        returns: json with the osinfo data
-        """
-        nodes = POLICIES.default.object_ring.devs
-        osinfo_json = dict()
-        for node in nodes:
-            try:
-                conn = http_connect(node['ip'], node['port'],"osinfo", "",
-                           'GET', "", headers="")
-                resp = conn.getresponse()
-                if is_success(resp.status):
-                    nodeid = node['ip'] + ':' + str(node['port'])
-                    osinfo_json.update(json.loads(resp.read()))
-            except Exception:
-                nodeid = node['ip'] + ':' + str(node['port'])
-                osinfo_json[nodeid] = "Error with Object Server"
-        return osinfo_json
-
-
-    def get_bwdict(self):
-        """
-        Gets all the bw assignations stored in the Object-servers.
-
-        returns: json with the bw assignations.
-        """
-        nodes = POLICIES.default.object_ring.devs
-        dict_json = dict()
-        for node in nodes:
-            try:
-                conn = http_connect(node['ip'], node['port'],"bwdict", "",
-                           'GET', "", headers="")
-                resp = conn.getresponse()
-                if is_success(resp.status):
-                    nodeid = node['ip'] + ':' + str(node['port'])
-                    dict_json[nodeid] = json.loads(resp.read())
-            except Exception:
-                nodeid = node['ip'] + ':' + str(node['port'])
-                dict_json[nodeid] = "Error with Object Server"
-        return dict_json
-
     def __call__(self, env, start_response):
         """
         WSGI entry point.
@@ -395,24 +352,6 @@ class Application(object):
                     request=req, body='Invalid UTF8 or contains NULL')
 
             try:
-                if 'osinfo' in req.path:
-                    if 'keystone.identity' in req.environ:
-                        user_roles = req.environ['keystone.identity'].get('roles')
-                        if 'admin' in user_roles:
-                            return HTTPOk(request=req, body=json.dumps(self.get_osinfo_data()),
-                                content_type="application/json")
-                    return HTTPForbidden(request=req, body='Authentication with admin'
-                        ' role required to perform "bw" operations')
-
-                if 'bwdict' in req.path:
-                    if 'keystone.identity' in req.environ:
-                        user_roles = req.environ['keystone.identity'].get('roles')
-                        if 'admin' in user_roles:
-                            return HTTPOk(request=req, body=json.dumps(self.get_bwdict()),
-                                content_type="application/json")
-                    return HTTPForbidden(request=req, body='Authentication with admin'
-                        ' role required to perform "bw" operations')
-
                 controller, path_parts = self.get_controller(req)
                 p = req.path_info
                 if isinstance(p, unicode):
@@ -491,24 +430,25 @@ class Application(object):
         # Python's sort is stable (http://wiki.python.org/moin/HowTo/Sorting/)
         shuffle(nodes)
         if self.sorting_method == 'bw':
+            try:
+                r = redis.Redis(connection_pool=redis.ConnectionPool(host=self.redis_host, port=self.redis_port, db=0))
+                nodes_redis = r.hgetall('sorted_nodes')
+                for node in nodes_redis:
+                    ip, port = node.split(':')
+                    for n in nodes:
+                        if str(n['ip']) == str(ip) and str(n['port']) == str(port):
+                            n['timing'] = int(nodes_redis[node])
 
-            for node in nodes:
-                getBW = "{ip}:{port}/bwinfo".format(**node)
-                conn = http_connect(node['ip'], node['port'],"bwinfo", "",
-                                'GET', "", headers="")
-                resp = conn.getresponse()           
-                if is_success(resp.status):
-                    BWtiming = resp.read()  # Returns (read MB/s + write MB/s)"
-                    node['timing'] = BWtiming
-                #       
-                    def key_func(node):
-                        if 'timing' in node:
-                            return node['timing']
-                        else:
-                            return 0
+                def key_func(node):
+                    if 'timing' in node:
+                        return node['timing']
+                    else:
+                        node['timing'] = 100000
+                        return node['timing']
 
-                    nodes.sort(key=key_func)
-
+                nodes.sort(key=key_func)
+            except:
+                pass
 
         elif self.sorting_method == 'timing':
             now = time()
