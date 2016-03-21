@@ -1044,9 +1044,6 @@ class ObjectController(BaseStorageServer):
             self.thstats.start()
             time.sleep(0.1)
 
-            self.logger.error(_("MARC %s"), self._monitoring_enabled)
-
-
     def str2bool(self, v):
       return v.lower() in ("yes", "true", "t", "1")
 
