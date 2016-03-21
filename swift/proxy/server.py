@@ -429,25 +429,31 @@ class Application(object):
         # (ie within the rounding resolution) won't prefer one over another.
         # Python's sort is stable (http://wiki.python.org/moin/HowTo/Sorting/)
         shuffle(nodes)
-        if self.sorting_method == 'bw':
+        if self.sorting_method == 'iostack':
             try:
                 r = redis.Redis(connection_pool=redis.ConnectionPool(host=self.redis_host, port=self.redis_port, db=0))
-                nodes_redis = r.hgetall('sorted_nodes')
-                for node in nodes_redis:
-                    ip, port = node.split(':')
-                    for n in nodes:
-                        if str(n['ip']) == str(ip) and str(n['port']) == str(port):
-                            n['timing'] = int(nodes_redis[node])
+                sorted_nodes_method = r.get("sorted_nodes_method")
+                sorted_nodes_criterion = r.get("sorted_nodes_criterion")
+                key_nodes = [n["ip"]+":"str(n["port"]+"/"+n["device"]) for n in nodes ]
+                values_for_sorting = r.hmget(sorted_nodes_method, key_nodes)
+
+                for (n, sorting_value) in zip(nodes, values_for_sorting):
+                    n["iostack_value"] = sorting_value
 
                 def key_func(node):
-                    if 'timing' in node:
-                        return node['timing']
+                    if 'iostack_value' in node:
+                        return node['iostack_value']
                     else:
-                        node['timing'] = 100000
-                        return node['timing']
+                        node['iostack_value'] = 0
+                        return node['iostack_value']
 
-                nodes.sort(key=key_func)
+                if sorted_nodes_criterion is "descending":
+                    nodes.sort(key=key_func, reverse=True)
+                else:
+                    nodes.sort(key=key_func)
+
             except:
+                self.logger.error(_('IOStack Sort_nodes error:  %s %s'),self.sorting_method, nodes)
                 pass
 
         elif self.sorting_method == 'timing':
