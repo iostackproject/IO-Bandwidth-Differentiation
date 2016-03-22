@@ -1030,16 +1030,17 @@ class ObjectController(BaseStorageServer):
             time.sleep(0.1)
 
             #consumer
-            self.queue_bw = 'bw_assignations:'+ self.ip
+            self.queue_bw = self.conf.get('consumer_tag') + ":" + self.ip
             self.channel.queue_declare(queue=self.queue_bw)
-            self.channel.exchange_declare(exchange='bw_assignations', type='topic')
-            self.channel.queue_bind(exchange='bw_assignations', queue=self.queue_bw, routing_key=self.routing_key)
+            self.channel.exchange_declare(exchange=self.conf.get('consumer_tag'), type='topic')
+            self.channel.queue_bind(exchange=self.conf.get('consumer_tag'), queue=self.queue_bw, routing_key=self.routing_key)
             self.consumer = self.channel.basic_consume(self.bw_assignations, queue=self.queue_bw, no_ack=True)
             self.thassignations = threading.Thread(target=self.channel.start_consuming)
             self.thassignations.start()
             time.sleep(0.1)
 
             #disk stats
+            self.channel.queue_declare(queue=self.conf.get('queue_osstats'))
             self.thstats = threading.Thread(target = self.diskstats_threaded, name = 'disk_stats', 
                                         args = (self.event, self.ip, 
                                             self._monitoring_enabled, self.channel, 
