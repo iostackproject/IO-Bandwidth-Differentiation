@@ -21,6 +21,8 @@ import os
 import redis
 import pika
 import threading
+import signal
+import sys
 import psutil
 import multiprocessing
 import time
@@ -1003,6 +1005,8 @@ class ObjectController(BaseStorageServer):
         self.redis_host = self.conf.get('redis_host', '127.0.0.1').lower()
         self.redis_port = self.conf.get('redis_port', 6379)
         self.BWstats = dict()
+        signal.signal(signal.SIGTERM, self.sigterm_handler)
+
         try:
             self._monitoring_enabled = self.str2bool(self.conf.get('enabled'))
         except Exception:
@@ -1112,6 +1116,7 @@ class ObjectController(BaseStorageServer):
             data = dict()
             data[ip] = content
             return data
+
     def getDiskStats(self, disk):
         """
         Aggregates all the partitions of the same disk 
@@ -1230,16 +1235,16 @@ class ObjectController(BaseStorageServer):
         return bw[bw_key]
 
 
-    def __del__(self):
+    def sigterm_handler(self, signum, frame):
+        #TODO: Kill properly all threads
         try:
             self.event.set()
             if self._monitoring_enabled:
-                self.channel.stop_consuming()
-                self.channel.close()
-                self.thassignations.join
                 self.thbw.join()
-                self.connection.close()
                 self.thstats.join()
+                self.channel.basic_cancel(self.consumer)
+            sys.exit()
+
         except RuntimeError as err:
             pass
 
