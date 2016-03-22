@@ -434,7 +434,7 @@ class Application(object):
                 r = redis.Redis(connection_pool=redis.ConnectionPool(host=self.redis_host, port=self.redis_port, db=0))
                 sorted_nodes_method = r.get("sorted_nodes_method")
                 sorted_nodes_criterion = r.get("sorted_nodes_criterion")
-                key_nodes = [n["ip"]+":"str(n["port"])+"/"+n["device"] for n in nodes ]
+                key_nodes = [n["ip"]+":"+str(n["port"])+"/"+n["device"] for n in nodes ]
                 values_for_sorting = r.hmget("sorted_nodes:"+str(sorted_nodes_method), key_nodes)
 
                 for (n, sorting_value) in zip(nodes, values_for_sorting):
