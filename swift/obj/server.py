@@ -710,7 +710,7 @@ class ObjectController(BaseStorageServer):
             bwlimit = -1
         try:
             disk_file = self.get_diskfile(
-                device, partition, account, container, obj, bwlimit, 
+                device, partition, account, container, obj, bwlimit,
                 policy=policy)
         except DiskFileDeviceUnavailable:
             return HTTPInsufficientStorage(drive=device, request=request)
@@ -1021,10 +1021,10 @@ class ObjectController(BaseStorageServer):
             self.channel = self.connection.channel()
 
             #bwinfo
-            self.channel.queue_declare(queue=self.conf.get('queue_osinfo'))
-            self.thbw = threading.Thread(target = self.bwinfo_threaded, name = 'bwinfo_threaded', 
-                                        args = (self.event, 'bwinfo_threaded', self.channel, 
-                                            self.conf.get('interval_osinfo'), self.conf.get('queue_osinfo'), 
+            # self.channel.queue_declare(queue=self.conf.get('queue_osinfo'))
+            self.thbw = threading.Thread(target = self.bwinfo_threaded, name = 'bwinfo_threaded',
+                                        args = (self.event, 'bwinfo_threaded', self.channel,
+                                            self.conf.get('interval_osinfo'), self.conf.get('routing_key'),
                                             self.bind_ip, self.bind_port,))
             self.thbw.start()
             time.sleep(0.1)
@@ -1041,10 +1041,10 @@ class ObjectController(BaseStorageServer):
 
             #disk stats
             self.channel.queue_declare(queue=self.conf.get('queue_osstats'))
-            self.thstats = threading.Thread(target = self.diskstats_threaded, name = 'disk_stats', 
-                                        args = (self.event, self.ip, 
-                                            self._monitoring_enabled, self.channel, 
-                                            self.conf.get('interval_osstats'), 
+            self.thstats = threading.Thread(target = self.diskstats_threaded, name = 'disk_stats',
+                                        args = (self.event, self.ip,
+                                            self._monitoring_enabled, self.channel,
+                                            self.conf.get('interval_osstats'),
                                             self.conf.get('queue_osstats'), self.BWstats,))
             self.thstats.start()
             time.sleep(0.1)
@@ -1052,12 +1052,12 @@ class ObjectController(BaseStorageServer):
     def str2bool(self, v):
       return v.lower() in ("yes", "true", "t", "1")
 
-    def bwinfo_threaded(self, event, name, channel, interval, queue, osip, osport):
+    def bwinfo_threaded(self, event, name, channel, interval, routing_key, osip, osport):
         while True:
             if event.wait(int(interval)):
                 break
             content = self._get_osinfo_data()
-            channel.basic_publish(exchange='', routing_key=queue, body=str(content))
+            channel.basic_publish(exchange=self.conf.get('exchange_osinfo'), routing_key=routing_key, body=str(content))
 
     def bw_assignations(self, ch, method, properties, body):
         for address in body.split():
@@ -1120,7 +1120,7 @@ class ObjectController(BaseStorageServer):
 
     def getDiskStats(self, disk):
         """
-        Aggregates all the partitions of the same disk 
+        Aggregates all the partitions of the same disk
 
         It should be better to put it out of the IOStackThreadPool
 
@@ -1182,7 +1182,7 @@ class ObjectController(BaseStorageServer):
 
     def setbw(self, path):
         def is_Int(s):
-            try: 
+            try:
                 int(s)
                 return (True if int(s) > 0 else False)
             except ValueError:
