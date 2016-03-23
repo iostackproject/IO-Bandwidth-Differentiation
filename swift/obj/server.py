@@ -1068,52 +1068,23 @@ class ObjectController(BaseStorageServer):
                         self.bw_update(account, policy.name)
 
     def _get_osinfo_data(self):
-
             # Submit oid - bw information about the current worker that will be the only one...
-            content = defaultdict(lambda: dict())
-            num = defaultdict(lambda: 0)
+            content = dict()
             ip = self.bind_ip + ":" + self.bind_port
             for policy in POLICIES:
                 if len(self._diskfile_router[policy].threadpools) > 0:
                     for k,v in self._diskfile_router[policy].threadpools.iteritems():
                         v.checkQueues()
                         v.removeQueues()
-                        new = True
+                        if not k in content:
+                            content[k] = dict()
                         for k2,v2 in v._worker2disk.iteritems():
-                            for k3 in content[k]:
-                                if content[k][k3]['account'] == v._diskreaders[int(v2)][0]._account and \
-                                    content[k][k3]['policy'] == policy.name:
-                                    for obj in v._diskreaders[int(v2)]:
-                                        obje = dict()
-                                        obje['oid'] = obj._data_name
-                                        obje['range'] = str(obj._start) + " - " + str(obj._stop)
-                                        obje['oid_calculated_BW'] = v._calculated_BW[int(v2)]
-                                        content[k][k3]['objects'].append(obje)
-                                    try:
-                                        content[k][k3]['needed_BW'] = self.bwlimit[content[k][k3]['account']][policy.name]
-                                    except Exception:
-                                        self.bw_update(content[k][k3]['account'], policy.get_name_and_placement)
-                                        content[k][k3]['needed_BW'] = self.bwlimit[content[k][k3]['account']][policy.name]
-                                    new = False
-                            if new:
-                                item = dict()
-                                item['identifier'] = v._id
-                                item['account'] = v._diskreaders[int(v2)][0]._account
-                                item['objects'] = []
-                                for obj in v._diskreaders[int(v2)]:
-                                    obje = dict()
-                                    obje['oid'] = obj._data_name
-                                    obje['range'] = str(obj._start) + " - " + str(obj._stop)
-                                    obje['oid_calculated_BW'] = v._calculated_BW[int(v2)]
-                                    item['objects'].append(obje)
-                                item['policy'] = policy.name
-                                try:
-                                    item['needed_BW'] = self.bwlimit[item['account']][policy.name]
-                                except Exception:
-                                    self.bwlimit[item['account']][policy.name] = -1
-                                    content[k][k3]['needed_BW'] = self.bwlimit[item['account']][policy.name]
-                                content[k][num[k]] = item
-                                num[k]+=1
+                            if not v._diskreaders[int(v2)][0]._account in content[k]:
+                                content[k][v._diskreaders[int(v2)][0]._account] = dict()
+                            if not policy.name in content[k][v._diskreaders[int(v2)][0]._account]:
+                                content[k][v._diskreaders[int(v2)][0]._account][policy.name] = v._calculated_BW[int(v2)]
+                            else:
+                                content[k][v._diskreaders[int(v2)][0]._account][policy.name]+= v._calculated_BW[int(v2)]
             data = dict()
             data[ip] = content
             return data
