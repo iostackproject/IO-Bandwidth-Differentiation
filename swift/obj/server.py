@@ -1056,8 +1056,8 @@ class ObjectController(BaseStorageServer):
         while True:
             if event.wait(int(interval)):
                 break
-            content = self._get_osinfo_data()
-            channel.basic_publish(exchange=self.conf.get('exchange_osinfo'), routing_key=routing_key, body=str(content))
+            content = json.dumps(self._get_osinfo_data())
+            channel.basic_publish(exchange=self.conf.get('exchange_osinfo'), routing_key=routing_key, body=content)
 
     def bw_assignations(self, ch, method, properties, body):
         for address in body.split():
