@@ -1118,8 +1118,8 @@ class ObjectController(BaseStorageServer):
         arrjson = dict()
         devices = psutil.disk_partitions(all=False)
         for d in devices:
-            arr[d.device[:-1]] = LCircular()
-            stats[d.device[:-1]] = self.getDiskStats(d.device[:-1])
+            arr[d.mountpoint] = LCircular()
+            stats[d.mountpoint] = self.getDiskStats(d.device[:-1])
         s = 0
         while True:
             if s>0:
