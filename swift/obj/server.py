@@ -1115,11 +1115,13 @@ class ObjectController(BaseStorageServer):
         _sendtime = int(interval)
         stats = dict()
         arr = dict()
+        names = dict()
         arrjson = dict()
         devices = psutil.disk_partitions(all=False)
         for d in devices:
             arr[d.device[:-1]] = LCircular()
             stats[d.device[:-1]] = self.getDiskStats(d.device[:-1])
+            names[d.device[:-1]] = d.mountpoint
         s = 0
         while True:
             if s>0:
@@ -1135,14 +1137,13 @@ class ObjectController(BaseStorageServer):
                     disks['mean-1min'] = sum(arr[i][0:60])/60
                     disks['mean-2min'] = sum(arr[i][0:120])/120
                     disks['mean-5min'] = sum(arr[i])/300
-                    arrjson[name + i] = disks
+                    arrjson[name + names[i]] = disks
                     if enabled and s == _sendtime:
                         channel.basic_publish(exchange='', properties=pika.BasicProperties(
                                         content_type='application/json'),routing_key=queue, body=json.dumps(arrjson))
                         s = 0
             if event.wait(_waittime):
                 break
-            BWdisk = dict()
             s+=1
             for i in stats:
                 read, write = self.getDiskStats(i)
