@@ -1035,7 +1035,14 @@ class ObjectController(BaseStorageServer):
             self.channel.exchange_declare(exchange=self.conf.get('consumer_tag'), type='topic')
             self.channel.queue_bind(exchange=self.conf.get('consumer_tag'), queue=self.queue_bw, routing_key=self.routing_key)
             self.consumer = self.channel.basic_consume(self.bw_assignations, queue=self.queue_bw, no_ack=True)
-            self.thassignations = threading.Thread(target=self.channel.start_consuming)
+
+            def custom_consuming():
+                while True:
+                    if self.event.wait(1):
+                        break
+                    self.channel.connection.process_data_events(time_limit=1) # 1 second
+
+            self.thassignations = threading.Thread(target=custom_consuming)
             self.thassignations.start()
             time.sleep(0.1)
 
@@ -1066,6 +1073,8 @@ class ObjectController(BaseStorageServer):
                 if not policy:
                     for policy in POLICIES:
                         self.bw_update(account, policy.name)
+                else:
+                    self.bw_update(account, policy.name)
 
     def _get_osinfo_data(self):
             # Submit oid - bw information about the current worker that will be the only one...
@@ -1216,8 +1225,8 @@ class ObjectController(BaseStorageServer):
                 self.thbw.join()
                 self.thstats.join()
                 self.channel.basic_cancel(self.consumer)
+                self.thassignations.join()
             sys.exit()
-
         except RuntimeError as err:
             pass
 
