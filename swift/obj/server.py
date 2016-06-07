@@ -106,6 +106,8 @@ class EventletPlungerString(str):
     def __len__(self):
         return wsgi.MINIMUM_CHUNK_SIZE + 1
 
+global INIT
+INIT = 0
 
 class ObjectController(BaseStorageServer):
     """Implements the WSGI application for the Swift Object Server."""
@@ -176,7 +178,9 @@ class ObjectController(BaseStorageServer):
 
         # Provide further setup specific to an object server implementation.
         self.setup(conf)
-        self.init_iostack()
+        if INIT==3:
+            self.init_iostack()
+        INIT += 1
 
     def setup(self, conf):
         """
@@ -1082,18 +1086,18 @@ class ObjectController(BaseStorageServer):
             ip = self.bind_ip + ":" + self.bind_port
             for policy in POLICIES:
                 if len(self._diskfile_router[policy].threadpools) > 0:
-                    for k,v in self._diskfile_router[policy].threadpools.iteritems():
-                        v.checkQueues()
-                        v.removeQueues()
-                        if not k in content:
-                            content[k] = dict()
-                        for k2,v2 in v._worker2disk.iteritems():
-                            if not v._diskreaders[int(v2)][0]._account in content[k]:
-                                content[k][v._diskreaders[int(v2)][0]._account] = dict()
-                            if not policy.name in content[k][v._diskreaders[int(v2)][0]._account]:
-                                content[k][v._diskreaders[int(v2)][0]._account][policy.name] = v._calculated_BW[int(v2)]
+                    for dsk,thpool in self._diskfile_router[policy].threadpools.iteritems():
+                        thpool.checkQueues()
+                        thpool.removeQueues()
+                        for obj_id, th_id in thpool._worker2disk.iteritems():
+                            if not thpool._diskreaders[int(th_id)][0]._account in content:
+                                content[thpool._diskreaders[int(th_id)][0]._account] = dict()
+                            if not policy.name in content[thpool._diskreaders[int(th_id)][0]._account]:
+                                content[thpool._diskreaders[int(th_id)][0]._account][policy.name] = dict()
+                            if not dsk in content[thpool._diskreaders[int(th_id)][0]._account][policy.name]:
+                                content[thpool._diskreaders[int(th_id)][0]._account][policy.name][dsk] = thpool._calculated_BW[int(th_id)]
                             else:
-                                content[k][v._diskreaders[int(v2)][0]._account][policy.name]+= v._calculated_BW[int(v2)]
+                                content[thpool._diskreaders[int(th_id)][0]._account][policy.name][dsk]+= thpool._calculated_BW[int(th_id)]
             data = dict()
             data[ip] = content
             return data
