@@ -178,6 +178,7 @@ class ObjectController(BaseStorageServer):
 
         # Provide further setup specific to an object server implementation.
         self.setup(conf)
+        global INIT
         if INIT==3:
             self.init_iostack()
         INIT += 1
