@@ -106,6 +106,8 @@ class EventletPlungerString(str):
     def __len__(self):
         return wsgi.MINIMUM_CHUNK_SIZE + 1
 
+global INIT
+INIT = 0
 
 class ObjectController(BaseStorageServer):
     """Implements the WSGI application for the Swift Object Server."""
@@ -176,7 +178,10 @@ class ObjectController(BaseStorageServer):
 
         # Provide further setup specific to an object server implementation.
         self.setup(conf)
-        self.init_iostack()
+        global INIT
+        if INIT==3:
+            self.init_iostack()
+        INIT += 1
 
     def setup(self, conf):
         """
@@ -1097,7 +1102,6 @@ class ObjectController(BaseStorageServer):
                                 content[thpool._diskreaders[int(th_id)][0]._account][policy.name][dsk] = thpool._calculated_BW[int(th_id)]
                             else:
                                 content[thpool._diskreaders[int(th_id)][0]._account][policy.name][dsk]+= thpool._calculated_BW[int(th_id)]
-
             data = dict()
             data[ip] = content
             return data
