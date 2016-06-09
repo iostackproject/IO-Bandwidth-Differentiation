@@ -1056,8 +1056,11 @@ class DiskFileReader(object):
                 self._started_at_0 = True
                 self._iter_etag = hashlib.md5()
             while True:
-                chunk = self._threadpool.run_in_thread_shaping(self, self._disk_chunk_size)
-                if chunk:
+		try:
+                    chunk = self._threadpool.run_in_thread_shaping(self, self._disk_chunk_size)
+                except:
+		    chunk = self._threadpool.run_in_thread(self._fp.read, self._disk_chunk_size)
+		if chunk:
                     if self._iter_etag:
                         self._iter_etag.update(chunk)
                     self._bytes_read += len(chunk)
