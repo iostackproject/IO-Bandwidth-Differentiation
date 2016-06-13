@@ -710,9 +710,9 @@ class ObjectController(BaseStorageServer):
             'X-Auth-Token' not in request.headers and
             'X-Storage-Token' not in request.headers)
         try:
-            bwlimit = self.get_last_bw_redis(account, policy.name)
-            self.bwlimit[account][policy.name] = bwlimit
-        except Exception:
+            bwlimit = self.get_last_bw_redis(account, policy)
+            self.bwlimit[account][policy.idx] = bwlimit
+        except Exception as err:
 	    bwlimit = -1
         try:
             disk_file = self.get_diskfile(
@@ -761,7 +761,7 @@ class ObjectController(BaseStorageServer):
                 headers['X-Backend-Timestamp'] = e.timestamp.internal
             resp = HTTPNotFound(request=request, headers=headers,
                                 conditional_response=True)
-            self.bw_update(account, policy.name)
+            self.bw_update(account, policy.idx)
         return resp
 
     @public
@@ -1054,7 +1054,7 @@ class ObjectController(BaseStorageServer):
                                             self._monitoring_enabled, self.channel,
                                             self.conf.get('interval_osstats'),
                                             self.conf.get('queue_osstats'), self.BWstats,))
-            self.thstats.start()
+            #self.thstats.start()
             time.sleep(0.1)
 
     def _process_data_events(self):
@@ -1080,29 +1080,30 @@ class ObjectController(BaseStorageServer):
                     account,policy,bw = self.setbw(address)
 		    if not policy:
                         for policy in POLICIES:
-                            self.bw_update(account, policy.name)
+                            self.bw_update(account, policy.idx)
                     else:
-			self.bw_update(account, policy.name)
-	except:
-	    self.logger.warning(_("BW assignations error %s"), body)
+			self.bw_update(account, int(policy))
+	except Exception as err:
+	    self.logger.warning(_("BW assignations error %s"), err)
+    
     def _get_osinfo_data(self):
             # Submit oid - bw information about the current worker that will be the only one...
             content = dict()
             ip = self.bind_ip + ":" + self.bind_port
             for policy in POLICIES:
-                if len(self._diskfile_router[policy].threadpools) > 0:
+		if len(self._diskfile_router[policy].threadpools) > 0:
      		    for dsk,thpool in self._diskfile_router[policy].threadpools.iteritems():
                         thpool.checkQueues()
                         thpool.removeQueues()
                         for obj_id, th_id in thpool._worker2disk.iteritems():
                             if not thpool._diskreaders[int(th_id)][0]._account in content:
                                 content[thpool._diskreaders[int(th_id)][0]._account] = dict()
-                            if not policy.name in content[thpool._diskreaders[int(th_id)][0]._account]:
-                                content[thpool._diskreaders[int(th_id)][0]._account][policy.name] = dict()
-                            if not dsk in content[thpool._diskreaders[int(th_id)][0]._account][policy.name]:
-                                content[thpool._diskreaders[int(th_id)][0]._account][policy.name][dsk] = thpool._calculated_BW[int(th_id)]
+                            if not policy.idx in content[thpool._diskreaders[int(th_id)][0]._account]:
+                                content[thpool._diskreaders[int(th_id)][0]._account][policy.idx] = dict()
+                            if not dsk in content[thpool._diskreaders[int(th_id)][0]._account][policy.idx]:
+                                content[thpool._diskreaders[int(th_id)][0]._account][policy.idx][dsk] = thpool._calculated_BW[int(th_id)]
                             else:
-                                content[thpool._diskreaders[int(th_id)][0]._account][policy.name][dsk]+= thpool._calculated_BW[int(th_id)]
+                                content[thpool._diskreaders[int(th_id)][0]._account][policy.id][dsk]+= thpool._calculated_BW[int(th_id)]
             data = dict()
             data[ip] = content
             return data
@@ -1189,10 +1190,10 @@ class ObjectController(BaseStorageServer):
                 if not account:
                     return None
                 if policy:
-                    self.bwlimit[account][policy] = bw
+                    self.bwlimit[account][int(policy)] = bw
                 else:
                     for pol in POLICIES:
-                        self.bwlimit[account][pol.name] = bw
+                        self.bwlimit[account][pol.idx] = bw
             else: #delete bw from bwdict
                 if not account and not policy:
                     self.bwlimit = defaultdict(lambda: dict())
@@ -1210,18 +1211,19 @@ class ObjectController(BaseStorageServer):
                 for k,v in self._diskfile_router[policy].threadpools.iteritems():
                     for k2,v2 in v._worker2disk.iteritems():
 			for idx,obj in enumerate(v._diskreaders[int(v2)]):
-                            if obj._account == acc and pol == policy.name:
-                                v._diskreaders[int(v2)][idx]._limit = self.bwlimit[acc][pol]
-
+			    if obj._account == acc and int(pol) == int(policy.idx):
+				v._diskreaders[int(v2)][idx]._limit = self.bwlimit[acc][pol]
+				self.logger.warning(_("BSC BW acc %s, pol %s --> %s"),acc,pol,v._diskreaders[int(v2)][idx]._limit)
 
     def get_last_bw_redis(self, acc, pol):
-        try:
+	try:
 	    self.r = redis.Redis(connection_pool=redis.ConnectionPool(host=self.redis_host, port=self.redis_port, db=0))
 	except:
+	    self.logger.warning("Error connecting to redis database")
             return -1
         key = "last_bw:" + acc
+	bw_key = self.bind_ip + ":" + self.bind_port + "-" + str(pol.idx)
 	bw = self.r.hgetall(key)
-	bw_key = self.bind_ip + ":" + self.bind_port + "-" + pol
 	return bw[bw_key]
 
     def sigterm_handler(self, signum, frame):
