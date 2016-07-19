@@ -3123,10 +3123,15 @@ class IOStackThreadPool(object):
     The bandwidth is a hard limit (on both sides) now.
 
     """
-    def __init__(self, nthreads=2, identifier='object'):
+    def __init__(self, nthreads=128, identifier='object'):
        
         self.nthreads = 0   # Threads are dynamically created by run_in_thread_shaping and destroyed in the worker 
                             # Destruction is done for the last Thread (queue based), but they can be reused.
+        self.nthreads_small = nthreads
+        self._threads_small = []
+        self._run_queue_small = Queue()
+        self._result_queue_small = Queue()
+
         self._id = identifier
 
         self._run_queues = []
@@ -3174,6 +3179,9 @@ class IOStackThreadPool(object):
         # pool per disk, we have to reimplement this stuff.
         _raw_rpipe, self.wpipe = os.pipe()
         self.rpipe = greenio.GreenPipe(_raw_rpipe, 'rb', bufsize=0)
+
+        _raw_rpipe_small, self.wpipe_small = os.pipe()
+        self.rpipe_small = greenio.GreenPipe(_raw_rpipe_small, 'rb', bufsize=0)
         
         # This is the result-consuming greenthread that runs in the main OS
         # thread, as described above.
@@ -3181,6 +3189,18 @@ class IOStackThreadPool(object):
         # Pass a results queues, as we will have different queues 
         self._consumer_coro = greenthread.spawn_n(self._consume_results,
                                                   self._result_queues)
+
+        self._consumer_coro_small = greenthread.spawn_n(self._consume_results_small,
+                                                  self._result_queue_small)
+
+        for _junk in xrange(self.nthreads_small):
+            thr = stdlib_threading.Thread(
+                target=self._worker_small,
+                args=(self._run_queue_small, self._result_queue_small))
+            thr.daemon = True
+            thr.start()
+            self._threads_small.append(thr)
+
 
     def checkQueues(self):
         
@@ -3317,6 +3337,30 @@ class IOStackThreadPool(object):
                 work_queue.task_done()
                 os.write(self.wpipe, u'%05d' % index)  # this byte represents which queue we are working
                 
+    def _worker_small(self, work_queue, result_queue):
+        """
+        Pulls an item from the queue and runs it, then puts the result into
+        the result queue. Repeats forever.
+
+        :param work_queue: queue from which to pull work
+        :param result_queue: queue into which to place results
+        """
+        while True:
+            item = work_queue.get()
+            if item is None:
+                break
+            ev, disk, fp, func, args, kwargs = item
+            try:
+                result = func(*args, **kwargs)
+                result_queue.put((ev, True, result))
+            except BaseException:
+                result_queue.put((ev, False, sys.exc_info()))
+            finally:
+                work_queue.task_done()
+                os.write(self.wpipe_small, self.BYTE)
+
+
+
     def _consume_results(self, queue):
         """
         Runs as a greenthread in the same OS thread as callers of
@@ -3347,6 +3391,36 @@ class IOStackThreadPool(object):
                 finally:
                     queue[queue_num].task_done()
 
+    def _consume_results_small(self, queue):
+        """
+        Runs as a greenthread in the same OS thread as callers of
+        run_in_thread().
+
+        Takes results from the worker OS threads and sends them to the waiting
+        greenthreads.
+        """
+        while True:
+            try:
+                self.rpipe_small.read(1)
+            except ValueError:
+                # can happen at process shutdown when pipe is closed
+                break
+
+            while True:
+                try:
+                    ev, success, result = queue.get(block=False)
+                except Empty:
+                    break
+
+                try:
+                    if success:
+                        ev.send(result)
+                    else:
+                        ev.send_exception(*result)
+                finally:
+                    queue.task_done()
+
+
     def run_in_thread(self, func, *args, **kwargs):
         """
         Runs func(*args, **kwargs) in a thread. Blocks the current greenlet
@@ -3371,11 +3445,9 @@ class IOStackThreadPool(object):
             return result
 
         ev = event.Event()
-        queue_num = random.randint(0,self.nthreads-1) 
         disk = None
         fp = None
-        self._run_queues[queue_num].put((ev, disk, fp, func, args, kwargs), block=False)
-        logging.warning("I am running with this params  %(parameters)s",{'parameters':self})
+        self._run_queue_small.put((ev, disk, fp, func, args, kwargs), block=False)
         # blocks this greenlet (and only *this* greenlet) until the real
         # thread calls ev.send().
         result = ev.wait()
@@ -3552,7 +3624,16 @@ class IOStackThreadPool(object):
         self._threads = []
         self.nthreads = 0
 
+        for _junk in range(self.nthreads_small):
+            self._run_queue_small.put(None)
+        for thr in self._threads_small:
+            thr.join()
+        self._threads_small = []
+        self.nthreads_small = 0
+
+
         greenthread.kill(self._consumer_coro)
+        greenthread.kill(self._consumer_coro_small)
 
         self.rpipe.close()
         os.close(self.wpipe)

@@ -594,7 +594,7 @@ class DiskFileManager(object):
             conf.get('replication_one_per_device', 'true'))
         self.replication_lock_timeout = int(conf.get(
             'replication_lock_timeout', 15))
-        threads_per_disk = int(conf.get('threads_per_disk', '0'))
+        threads_per_disk = int(conf.get('threads_per_disk', '5'))
         identifier = conf.get('bwdifferentiation', 'object')
         
         self.threadpools = defaultdict(
@@ -1075,6 +1075,10 @@ class DiskFileReader(object):
                     self._drop_cache(self._fp.fileno(), dropped_cache,
                                      self._bytes_read - dropped_cache)
                     break
+            if self._obj_size >= self._disk_chunk_size*self._max_chunks:
+                logging.warning(_("BSC-LOG: BIG file: %s --> obj-size: %s, th: %s, nhtreads: %s"), self._data_name, self._obj_size/1024, self._disk_chunk_size*self._max_chunks/1024, self._threadpool.nthreads)
+            else:
+                logging.warning(_("BSC-LOG: SMALL file: %s --> obj-size: %s, th: %s, nhtreads_small: %s"), self._data_name, self._obj_size/1024, self._disk_chunk_size*self._max_chunks/1024, self._threadpool.nthreads_small)
         finally:
             if not self._suppress_file_closing:
                 self.close()
