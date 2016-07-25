@@ -1010,7 +1010,8 @@ class ObjectController(BaseStorageServer):
     def init_iostack(self):
         self.redis_host = self.conf.get('redis_host', '127.0.0.1').lower()
         self.redis_port = int(self.conf.get('redis_port', 6379))
-        self.BWstats = dict()
+        self.os_identifier = self.conf.get('os_identifier', str(self.bind_ip+':'+self.bind_port))
+	self.BWstats = dict()
         signal.signal(signal.SIGTERM, self.sigterm_handler)
 	try:
             self._monitoring_enabled = self.str2bool(self.conf.get('enabled'))
@@ -1021,7 +1022,7 @@ class ObjectController(BaseStorageServer):
             #init
             self.event = threading.Event()
             self.ip = self.bind_ip + ':' + self.bind_port
-            self.routing_key = "#." +  self.ip.replace('.','-').replace(':','-')  + ".#"
+            self.routing_key = "#." +  self.os_identifier  + ".#"
 	    self.credentials = pika.PlainCredentials(self.conf.get('rabbit_username'), self.conf.get('rabbit_password'))
             self.connection = pika.BlockingConnection(pika.ConnectionParameters(self.conf.get('rabbit_host'), int(self.conf.get('rabbit_port')), '/', self.credentials))
             self.channel = self.connection.channel()
@@ -1076,7 +1077,7 @@ class ObjectController(BaseStorageServer):
     def bw_assignations(self, ch, method, properties, body):
 	try:
 	    for address in body.split():
-		if address.startswith(self.ip):
+		if address.startswith(self.os_identifier):
                     account,policy,bw = self.setbw(address)
 		    if not policy:
                         for policy in POLICIES:
@@ -1088,8 +1089,9 @@ class ObjectController(BaseStorageServer):
     
     def _get_osinfo_data(self):
             # Submit oid - bw information about the current worker that will be the only one...
-            content = dict()
-            ip = self.bind_ip + ":" + self.bind_port
+	try:
+	    data = dict()
+	    content = dict()
             for policy in POLICIES:
 		if len(self._diskfile_router[policy].threadpools) > 0:
      		    for dsk,thpool in self._diskfile_router[policy].threadpools.iteritems():
@@ -1101,12 +1103,13 @@ class ObjectController(BaseStorageServer):
                             if not policy.idx in content[thpool._diskreaders[int(th_id)][0]._account]:
                                 content[thpool._diskreaders[int(th_id)][0]._account][policy.idx] = dict()
                             if not dsk in content[thpool._diskreaders[int(th_id)][0]._account][policy.idx]:
-                                content[thpool._diskreaders[int(th_id)][0]._account][policy.idx][dsk] = thpool._calculated_BW[int(th_id)]
+                                content[thpool._diskreaders[int(th_id)][0]._account][policy.idx][dsk] = thpool._insta_BW[int(th_id)]
                             else:
-                                content[thpool._diskreaders[int(th_id)][0]._account][policy.id][dsk]+= thpool._calculated_BW[int(th_id)]
-            data = dict()
-            data[ip] = content
-            return data
+                                content[thpool._diskreaders[int(th_id)][0]._account][policy.idx][dsk]+= thpool._insta_BW[int(th_id)]
+            data[self.os_identifier] = content
+	except Exception as err:
+		self.logger.warning(_("Error retrieving osinfo data %s"), err)
+	return data
 
     def getDiskStats(self, disk):
         """
@@ -1229,9 +1232,9 @@ class ObjectController(BaseStorageServer):
     def sigterm_handler(self, signum, frame):
         #TODO: Kill properly all threads
         try:
-            self.event.set()
             if self._monitoring_enabled:
-                self.thbw.join()
+                self.event.set()
+		self.thbw.join()
                 self.thstats.join()
                 self.channel.basic_cancel(self.consumer)
                 self.thassignations.join()
