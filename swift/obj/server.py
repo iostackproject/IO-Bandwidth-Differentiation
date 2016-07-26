@@ -1011,7 +1011,7 @@ class ObjectController(BaseStorageServer):
         self.redis_host = self.conf.get('redis_host', '127.0.0.1').lower()
         self.redis_port = int(self.conf.get('redis_port', 6379))
         self.os_identifier = self.conf.get('os_identifier', str(self.bind_ip+':'+self.bind_port))
-	self.BWstats = dict()
+        self.BWstats = dict()
         signal.signal(signal.SIGTERM, self.sigterm_handler)
 	try:
             self._monitoring_enabled = self.str2bool(self.conf.get('enabled'))
@@ -1023,7 +1023,7 @@ class ObjectController(BaseStorageServer):
             self.event = threading.Event()
             self.ip = self.bind_ip + ':' + self.bind_port
             self.routing_key = "#." +  self.os_identifier  + ".#"
-	    self.credentials = pika.PlainCredentials(self.conf.get('rabbit_username'), self.conf.get('rabbit_password'))
+            self.credentials = pika.PlainCredentials(self.conf.get('rabbit_username'), self.conf.get('rabbit_password'))
             self.connection = pika.BlockingConnection(pika.ConnectionParameters(self.conf.get('rabbit_host'), int(self.conf.get('rabbit_port')), '/', self.credentials))
             self.channel = self.connection.channel()
 
@@ -1075,26 +1075,26 @@ class ObjectController(BaseStorageServer):
             channel.basic_publish(exchange=self.conf.get('exchange_osinfo'), routing_key=routing_key, body=content)
 
     def bw_assignations(self, ch, method, properties, body):
-	try:
-	    for address in body.split():
-		if address.startswith(self.os_identifier):
+        try:
+            for address in body.split():
+                if address.startswith(self.os_identifier):
                     account,policy,bw = self.setbw(address)
-		    if not policy:
-                        for policy in POLICIES:
-                            self.bw_update(account, policy.idx)
+                if not policy:
+                    for policy in POLICIES:
+                        self.bw_update(account, policy.idx)
                     else:
-			self.bw_update(account, int(policy))
-	except Exception as err:
-	    self.logger.warning(_("BW assignations error %s"), err)
+                        self.bw_update(account, int(policy))
+        except Exception as err:
+            self.logger.warning(_("BW assignations error %s"), err)
     
     def _get_osinfo_data(self):
             # Submit oid - bw information about the current worker that will be the only one...
-	try:
-	    data = dict()
-	    content = dict()
+        content = dict()
+        data = dict()
+        try:
             for policy in POLICIES:
-		if len(self._diskfile_router[policy].threadpools) > 0:
-     		    for dsk,thpool in self._diskfile_router[policy].threadpools.iteritems():
+                if len(self._diskfile_router[policy].threadpools) > 0:
+                    for dsk,thpool in self._diskfile_router[policy].threadpools.iteritems():
                         thpool.checkQueues()
                         thpool.removeQueues()
                         for obj_id, th_id in thpool._worker2disk.iteritems():
@@ -1107,9 +1107,10 @@ class ObjectController(BaseStorageServer):
                             else:
                                 content[thpool._diskreaders[int(th_id)][0]._account][policy.idx][dsk]+= thpool._insta_BW[int(th_id)]
             data[self.os_identifier] = content
-	except Exception as err:
-		self.logger.warning(_("Error retrieving osinfo data %s"), err)
-	return data
+            self.logger.warning(_("MARC %s"), data)
+        except Exception as err:
+            self.logger.warning(_("Error retrieving osinfo data %s"), err)    
+        return data
 
     def getDiskStats(self, disk):
         """
@@ -1232,9 +1233,10 @@ class ObjectController(BaseStorageServer):
     def sigterm_handler(self, signum, frame):
         #TODO: Kill properly all threads
         try:
+            
             if self._monitoring_enabled:
                 self.event.set()
-		self.thbw.join()
+                self.thbw.join()
                 self.thstats.join()
                 self.channel.basic_cancel(self.consumer)
                 self.thassignations.join()

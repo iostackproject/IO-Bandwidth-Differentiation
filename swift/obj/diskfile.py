@@ -1021,8 +1021,7 @@ class DiskFileReader(object):
         self._quarantine_hook = quarantine_hook
         self._use_splice = use_splice
         self._pipe_size = pipe_size
-        self._max_chunks = 10
-
+       
         if keep_cache:
             # Caller suggests we keep this in cache, only do it if the
             # object's size is less than the maximum.
@@ -1057,14 +1056,14 @@ class DiskFileReader(object):
                 self._started_at_0 = True
                 self._iter_etag = hashlib.md5()
             while True:
-                if self._obj_size >= self._disk_chunk_size*self._max_chunks:
+		try:
                     chunk = self._threadpool.run_in_thread_shaping(self, self._disk_chunk_size)
-                else:
-                    chunk = self._threadpool.run_in_thread(self._fp.read, self._disk_chunk_size)
-                if chunk:
+                except:
+		    chunk = self._threadpool.run_in_thread(self._fp.read, self._disk_chunk_size)
+		if chunk:
                     if self._iter_etag:
                         self._iter_etag.update(chunk)
-                        self._bytes_read += len(chunk)
+                    self._bytes_read += len(chunk)
                     if self._bytes_read - dropped_cache > DROP_CACHE_WINDOW:
                         self._drop_cache(self._fp.fileno(), dropped_cache,
                                          self._bytes_read - dropped_cache)

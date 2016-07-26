@@ -3135,8 +3135,11 @@ class IOStackThreadPool(object):
         self._alive = True
         self._calculated_BW = []
         self._calculate_BW = []
-	self._insta_BW = []
-	self._calculate_insta_BW = []
+
+        self._insta_BW = []
+        self._calculate_insta_BW = []
+        self._last_bw_update_interval = round(time.time()/0.5)
+
         self._augread = load_iostackmodule()
 
         self._needed_BW = []
@@ -3212,8 +3215,9 @@ class IOStackThreadPool(object):
                 self._calculate_BW.pop()
                 self._needed_BW.pop()
                 self._diskreaders.pop()
-		self._insta_BW.pop()
-		self._calculate_insta_BW.pop()
+                self._insta_BW.pop()
+                self._calculate_insta_BW.pop()
+              
 
                 thr = self._threads.pop()
                 thr.join()
@@ -3221,29 +3225,27 @@ class IOStackThreadPool(object):
                 self.nthreads = self.nthreads-1
             else:
                 break   # We cannot remove any more queue at the end...
-    
+
+
     def update_insta_bw_stats(self, index):
         """
             Updates the BW stats of a stream,
             It should be better to do the div every time we check it.
         """
         try:
-                mb , starttime = self._calculate_insta_BW[index]
-		time_now = time.time()
-                totaltime = time_now - starttime
-		totalsize = mb
-		if self._last_bw_update_interval != round(time_now/0.5) and mb>0:
-		    self._insta_BW[index] = (mb / float(time_now-starttime))
-		    self._calculate_insta_BW[index] = (0, time_now)
-		    self._last_bw_update_interval = round(time_now/0.5)
-		   
+            mb , starttime = self._calculate_insta_BW[index]
+            time_now = time.time()
+            totaltime = time_now - starttime
+            totalsize = mb
+            if self._last_bw_update_interval != round(time_now/0.5) and mb>0:
+                self._insta_BW[index] = (mb / float(time_now-starttime))
+                self._calculate_insta_BW[index] = (0, time_now)
+                self._last_bw_update_interval = round(time_now/0.5)
+          
         finally:
                 totaltime = 1
                 totalsize = 1
         return totaltime, totalsize
-
-
-
 
     def update_bw_stats(self, index):
         """
@@ -3332,10 +3334,10 @@ class IOStackThreadPool(object):
                     size = args[0]/(1024.0*1024.0)
                     mb, starttime = self._calculate_BW[index]
                     mb2, starttime2 = self._calculate_insta_BW[index]
-		    self._calculate_BW[index] = (mb + size, starttime)
-		    self._calculate_insta_BW[index] = (mb2 + size, starttime2)
-		    totaltime, totalsize = self.update_bw_stats(index)
-		    totaltime2, totalsize2 = self.update_insta_bw_stats(index)
+                    self._calculate_BW[index] = (mb + size, starttime)
+                    self._calculate_insta_BW[index] = (mb2 + size, starttime2)
+                    totaltime, totalsize = self.update_bw_stats(index)
+                    totaltime2, totalsize2 = self.update_insta_bw_stats(index)
 
                 self._last_REQ[index] = time.time()
             except BaseException:
@@ -3482,8 +3484,8 @@ class IOStackThreadPool(object):
                 self._calculate_BW[index] = (0,time.time())   # KB, start
                 self._needed_BW[index] = limit
                 self._diskreaders[index] = [diskfilereader]
-		self._insta_BW[index] = 0
-		self._calculate_insta_BW = (0, time.time())
+                self._insta_BW[index] = 0
+                self._calculate_insta_BW[index] = (0, time.time())
                 # TODO: If we sent from the client, probably we need it per AUTH, then each AUTH has its queue and not each DATA_FILE... However how this maps to multiple obkect stores, 
                 # Should we limit among them....We need that an external entity to tune each individual participating object store correctly and dynamically
                 #logging.warning("I am running to this queue  %(queue)s for %(disk)s / %(account)s at %(bw)s rate",{'queue':queue_num, 'disk':data_file , 'account':account, 'bw': self._needed_BW[index]})
@@ -3499,8 +3501,9 @@ class IOStackThreadPool(object):
                 self._needed_BW.append(limit)
                 self._diskreaders.append([diskfilereader])
                 self._insta_BW.append(0)
-		self._calculate_insta_BW.append( (0,time.time()) )
+                self._calculate_insta_BW.append( (0, time.time()))
 
+                
                 rq = Queue()
                 resq = Queue()
                 self._run_queues.append(rq)
