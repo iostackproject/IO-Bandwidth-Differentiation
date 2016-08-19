@@ -1038,7 +1038,7 @@ class ObjectController(BaseStorageServer):
 
             #consumer
 	    
-            self.queue_bw = self.conf.get('consumer_tag') + ":" + self.ip
+            self.queue_bw = self.conf.get('consumer_tag') + ":" + self.os_identifier
             self.channel.queue_declare(queue=self.queue_bw)
             self.channel.exchange_declare(exchange=self.conf.get('consumer_tag'), type='topic')
             self.channel.queue_bind(exchange=self.conf.get('consumer_tag'), queue=self.queue_bw, routing_key=self.routing_key)
@@ -1075,15 +1075,15 @@ class ObjectController(BaseStorageServer):
             channel.basic_publish(exchange=self.conf.get('exchange_osinfo'), routing_key=routing_key, body=content)
 
     def bw_assignations(self, ch, method, properties, body):
-        try:
-            for address in body.split():
-                if address.startswith(self.os_identifier):
-                    account,policy,bw = self.setbw(address)
-                if not policy:
-                    for policy in POLICIES:
-                        self.bw_update(account, policy.idx)
-                    else:
-                        self.bw_update(account, int(policy))
+	try:
+	    address = body
+            if address.startswith(self.os_identifier):
+		account,policy,bw = self.setbw(address)
+	    if not policy:
+                for policy in POLICIES:
+                    self.bw_update(account, policy.idx)
+            else:
+                self.bw_update(account, int(policy))
         except Exception as err:
             self.logger.warning(_("BW assignations error %s"), err)
     
@@ -1107,7 +1107,6 @@ class ObjectController(BaseStorageServer):
                             else:
                                 content[thpool._diskreaders[int(th_id)][0]._account][policy.idx][dsk]+= thpool._insta_BW[int(th_id)]
             data[self.os_identifier] = content
-            self.logger.warning(_("MARC %s"), data)
         except Exception as err:
             self.logger.warning(_("Error retrieving osinfo data %s"), err)    
         return data
@@ -1182,14 +1181,13 @@ class ObjectController(BaseStorageServer):
                 return (True if int(s) > 0 else False)
             except ValueError:
                 return False
-
-        r = filter(bool, path.split('/'))
-        method = r.pop(0) #ip
+	r = filter(bool, path.split('/'))
+	r.pop(0) #ip
         try:
             bw = float(r.pop())
             account = (r.pop(0) if r else None)
 	    r.pop(0) #method
-            policy = (r.pop(0) if r else None)
+	    policy = (r.pop(0) if r else None)
 	    if bw: #save bw into bwdict
                 if not account:
                     return None
@@ -1198,13 +1196,6 @@ class ObjectController(BaseStorageServer):
                 else:
                     for pol in POLICIES:
                         self.bwlimit[account][pol.idx] = bw
-            else: #delete bw from bwdict
-                if not account and not policy:
-                    self.bwlimit = defaultdict(lambda: dict())
-                elif not policy:
-                    self.bwlimit.pop(account,None)
-                else:
-                    self.bwlimit[account].pop(policy, None)
         except Exception as e:
             self.logger.warning(_("ERROR setting bw %s"), e)
         return (account, policy, bw)
