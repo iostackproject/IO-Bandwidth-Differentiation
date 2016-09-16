@@ -3366,7 +3366,7 @@ class IOStackThreadPool(object):
             while True:
                 try:
                     ev, success, result = queue[queue_num].get(block=False)
-                except Empty:
+                except:
                     break
 
                 try:
