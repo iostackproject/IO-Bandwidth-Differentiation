@@ -3128,6 +3128,7 @@ class IOStackThreadPool(object):
         self.nthreads = 0   # Threads are dynamically created by run_in_thread_shaping and destroyed in the worker 
                             # Destruction is done for the last Thread (queue based), but they can be reused.
         self._id = identifier
+        self._windowsize = windowsize
 
         self._run_queues = []
         self._result_queues = []
@@ -3138,7 +3139,7 @@ class IOStackThreadPool(object):
 
         self._insta_BW = []
         self._calculate_insta_BW = []
-        self._last_bw_update_interval = round(time.time()/0.5)
+        self._last_bw_update_interval = round(time.time()/self._windowsize)
 
         self._augread = load_iostackmodule()
 
@@ -3237,10 +3238,10 @@ class IOStackThreadPool(object):
             time_now = time.time()
             totaltime = time_now - starttime
             totalsize = mb
-            if self._last_bw_update_interval != round(time_now/windowsize) and mb>0:
+            if self._last_bw_update_interval != round(time_now/self._windowsize) and mb>0:
                 self._insta_BW[index] = (mb / float(time_now-starttime))
                 self._calculate_insta_BW[index] = (0, time_now)
-                self._last_bw_update_interval = round(time_now/windowsize)
+                self._last_bw_update_interval = round(time_now/self_windowsize)
           
         finally:
                 totaltime = 1
@@ -3466,7 +3467,7 @@ class IOStackThreadPool(object):
             self.checkQueues()
             # Remove old Threads (pop model, TODO: better)
             self.removeQueues()
-            self._last_bw_update_interval = round(time.time()/windowsize)
+            self._last_bw_update_interval = round(time.time()/self._windowsize)
             # Search first free queue (or create new if > numthreads)
             index = -1
             for i in xrange(self.nthreads):
