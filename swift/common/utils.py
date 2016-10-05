@@ -3123,7 +3123,7 @@ class IOStackThreadPool(object):
     The bandwidth is a hard limit (on both sides) now.
 
     """
-    def __init__(self, nthreads=2, identifier='object'):
+    def __init__(self, nthreads=2, identifier='object', windowsize=1):
        
         self.nthreads = 0   # Threads are dynamically created by run_in_thread_shaping and destroyed in the worker 
                             # Destruction is done for the last Thread (queue based), but they can be reused.
@@ -3237,10 +3237,10 @@ class IOStackThreadPool(object):
             time_now = time.time()
             totaltime = time_now - starttime
             totalsize = mb
-            if self._last_bw_update_interval != round(time_now/0.5) and mb>0:
+            if self._last_bw_update_interval != round(time_now/windowsize) and mb>0:
                 self._insta_BW[index] = (mb / float(time_now-starttime))
                 self._calculate_insta_BW[index] = (0, time_now)
-                self._last_bw_update_interval = round(time_now/0.5)
+                self._last_bw_update_interval = round(time_now/windowsize)
           
         finally:
                 totaltime = 1
@@ -3302,7 +3302,7 @@ class IOStackThreadPool(object):
             totaltime, totalsize = self.update_bw_stats(index)
             priority = 0    # Highest priority 
             # If our BW is higher
-	    calc = self.sumesp(self._calculated_BW,self._diskreaders[index][0]._account,False)
+	    calc = self.sumesp(self._insta_BW,self._diskreaders[index][0]._account,False)
             if (self._needed_BW[index] == -1) or (calc > self._needed_BW[index]):
                 priority = 7
 
@@ -3466,7 +3466,7 @@ class IOStackThreadPool(object):
             self.checkQueues()
             # Remove old Threads (pop model, TODO: better)
             self.removeQueues()
-            self._last_bw_update_interval = round(time.time()/0.5)
+            self._last_bw_update_interval = round(time.time()/windowsize)
             # Search first free queue (or create new if > numthreads)
             index = -1
             for i in xrange(self.nthreads):
