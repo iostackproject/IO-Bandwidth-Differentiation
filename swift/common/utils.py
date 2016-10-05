@@ -3241,7 +3241,7 @@ class IOStackThreadPool(object):
             if self._last_bw_update_interval != round(time_now/self._windowsize) and mb>0:
                 self._insta_BW[index] = (mb / float(time_now-starttime))
                 self._calculate_insta_BW[index] = (0, time_now)
-                self._last_bw_update_interval = round(time_now/self_windowsize)
+                self._last_bw_update_interval = round(time_now/self._windowsize)
           
         finally:
                 totaltime = 1
