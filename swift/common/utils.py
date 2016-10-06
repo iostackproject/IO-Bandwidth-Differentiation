@@ -3259,7 +3259,7 @@ class IOStackThreadPool(object):
             time_now = time.time()
             totaltime = time_now - starttime 
             totalsize = mb
-            if self._last_bw_window_interval != round(time_now)/self._windowsize and mb > 0:
+            if self._last_bw_window_interval != round(time_now/self._windowsize) and mb > 0:
                 self._calculated_BW[index] = (mb / float(time_now-starttime))
                 self._calculate_BW[index] = (0, time_now)
                 self._last_bw_window_interval = round(time_now/self._windowsize)
@@ -3305,7 +3305,6 @@ class IOStackThreadPool(object):
 	    #for i in xrange(self.nthreads):
 	#	self.update_bw_stats(i)
 
-            totaltime, totalsize = self.update_bw_stats(index)
             priority = 0    # Highest priority 
             # If our BW is higher
 	    calc = self.sumesp(self._calculated_BW,self._diskreaders[index][0]._account,False)
