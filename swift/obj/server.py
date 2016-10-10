@@ -1103,12 +1103,12 @@ class ObjectController(BaseStorageServer):
                             if not policy.idx in content[thpool._diskreaders[int(th_id)][0]._account]:
                                 content[thpool._diskreaders[int(th_id)][0]._account][policy.idx] = dict()
                             if not dsk in content[thpool._diskreaders[int(th_id)][0]._account][policy.idx]:
-                                content[thpool._diskreaders[int(th_id)][0]._account][policy.idx][dsk] = thpool._insta_BW[int(th_id)]
+                                content[thpool._diskreaders[int(th_id)][0]._account][policy.idx][dsk] = thpool._calculated_BW[int(th_id)]
                             else:
-                                content[thpool._diskreaders[int(th_id)][0]._account][policy.idx][dsk]+= thpool._insta_BW[int(th_id)]
+                                content[thpool._diskreaders[int(th_id)][0]._account][policy.idx][dsk]+= thpool._calculated_BW[int(th_id)]
             data[self.os_identifier] = content
         except Exception as err:
-            self.logger.warning(_("Error retrieving osinfo data %s"), err)    
+            self.logger.warning(_("Error retrieving osinfo data %s"), err)
         return data
 
     def getDiskStats(self, disk):

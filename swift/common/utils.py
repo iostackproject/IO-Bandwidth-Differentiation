@@ -3135,12 +3135,9 @@ class IOStackThreadPool(object):
         self._threads = []
         self._alive = True
         self._calculated_BW = []
-        self._calculate_BW = []
-
         self._insta_BW = []
         self._calculate_insta_BW = []
         self._last_bw_update_interval = round(time.time()/0.5)
-        self._last_bw_window_interval = round(time.time()/self._windowsize)
 
         self._augread = load_iostackmodule()
 
@@ -3214,7 +3211,6 @@ class IOStackThreadPool(object):
                 self._last_REQ.pop()
                 self._last_Prio.pop()
                 self._calculated_BW.pop()
-                self._calculate_BW.pop()
                 self._needed_BW.pop()
                 self._diskreaders.pop()
                 self._insta_BW.pop()
@@ -3240,8 +3236,10 @@ class IOStackThreadPool(object):
             totaltime = time_now - starttime
             totalsize = mb
             if self._last_bw_update_interval != round(time_now/0.5) and mb>0:
-                self._insta_BW[index] = (mb / float(time_now-starttime))
-                self._calculate_insta_BW[index] = (0, time_now)
+                self._insta_BW[index].append(mb / float(time_now-starttime))
+		listlength = 2 * self._windowsize
+		self._insta_BW[index] = self._insta_BW[index][-listlength:]
+		self._calculate_insta_BW[index] = (0, time_now)
                 self._last_bw_update_interval = round(time_now/0.5)
           
         finally:
@@ -3254,22 +3252,9 @@ class IOStackThreadPool(object):
             Updates the BW stats of a stream,
             It should be better to do the div every time we check it.
         """
-        try:
-            mb , starttime = self._calculate_BW[index]
-            time_now = time.time()
-            totaltime = time_now - starttime 
-            totalsize = mb
-            if self._last_bw_window_interval != round(time_now/self._windowsize) and mb > 0:
-                self._calculated_BW[index] = (mb / float(time_now-starttime))
-                self._calculate_BW[index] = (0, time_now)
-                self._last_bw_window_interval = round(time_now/self._windowsize)
-          
-        finally:
-                totaltime = 1
-                totalsize = 1
-        return totaltime, totalsize
-
-  
+	if len(self._insta_BW[index]) > 0:
+            self._calculated_BW[index] = sum(self._insta_BW[index])/len(self._insta_BW[index])
+ 
     def sumesp(self, queue, account, allvalues):
 	total = 0
 	i = 0
@@ -3337,12 +3322,10 @@ class IOStackThreadPool(object):
                
                 if (fp is not None):
                     size = args[0]/(1024.0*1024.0)
-                    mb, starttime = self._calculate_BW[index]
                     mb2, starttime2 = self._calculate_insta_BW[index]
-                    self._calculate_BW[index] = (mb + size, starttime)
                     self._calculate_insta_BW[index] = (mb2 + size, starttime2)
-                    totaltime, totalsize = self.update_bw_stats(index)
                     totaltime2, totalsize2 = self.update_insta_bw_stats(index)
+		    self.update_bw_stats(index)
 
                 self._last_REQ[index] = time.time()
             except BaseException:
@@ -3472,7 +3455,6 @@ class IOStackThreadPool(object):
             # Remove old Threads (pop model, TODO: better)
             self.removeQueues()
             self._last_bw_update_interval = round(time.time()/0.5)
-            self._last_bw_window_interval = round(time.time()/self._windowsize)
             # Search first free queue (or create new if > numthreads)
             index = -1
             for i in xrange(self.nthreads):
@@ -3487,10 +3469,9 @@ class IOStackThreadPool(object):
                 self._calculated_BW[index] = 0   # We assume the initial BW will be the limit
                 self._last_REQ[index] = time.time()
                 self._last_Prio[index] = -1
-                self._calculate_BW[index] = (0,time.time())   # KB, start
                 self._needed_BW[index] = limit
                 self._diskreaders[index] = [diskfilereader]
-                self._insta_BW[index] = 0
+		self._insta_BW[index] = []
                 self._calculate_insta_BW[index] = (0, time.time())
                 # TODO: If we sent from the client, probably we need it per AUTH, then each AUTH has its queue and not each DATA_FILE... However how this maps to multiple obkect stores, 
                 # Should we limit among them....We need that an external entity to tune each individual participating object store correctly and dynamically
@@ -3501,12 +3482,11 @@ class IOStackThreadPool(object):
                 self._worker2disk[identifier] = self.nthreads
                 self._indexworker.append(self.nthreads)
                 self._calculated_BW.append(0)
-                self._calculate_BW.append( (0,time.time()) )   # KB, start
                 self._last_REQ.append(time.time()) 
                 self._last_Prio.append(-1)
                 self._needed_BW.append(limit)
                 self._diskreaders.append([diskfilereader])
-                self._insta_BW.append(0)
+                self._insta_BW.append([])
                 self._calculate_insta_BW.append( (0, time.time()))
 
                 

@@ -596,7 +596,7 @@ class DiskFileManager(object):
             'replication_lock_timeout', 15))
         threads_per_disk = int(conf.get('threads_per_disk', '0'))
         identifier = conf.get('bwdifferentiation', 'object')
-        wind = float(conf.get('windowsize', 1))
+        wind = int(conf.get('windowsize', 1))
         
         self.threadpools = defaultdict(
             lambda: IOStackThreadPool(nthreads=threads_per_disk, identifier=identifier, windowsize=wind))
